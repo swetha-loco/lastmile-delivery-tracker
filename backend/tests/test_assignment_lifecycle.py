@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, or_, select
 
+from app.config import get_settings
 from app.db import SessionLocal
 from app.main import app
 from app.models import (
@@ -16,6 +17,9 @@ from app.models import (
     AgentProfile,
     DeliveryAttempt,
     DeliveryAttemptStatus,
+    NotificationChannel,
+    NotificationDelivery,
+    NotificationStatus,
     Order,
     OrderStatus,
     OrderStatusHistory,
@@ -29,6 +33,8 @@ from app.models import (
 )
 from app.security import hash_password
 from app.services import assignment
+from app.services.notifications import ProviderResult, ProviderSendError
+from app.services.notifications import process_notification_batch
 
 client = TestClient(app)
 
@@ -584,6 +590,459 @@ def test_admin_override_requires_reason_and_maintains_availability() -> None:
         assert event is not None
 
 
+def test_failed_delivery_requires_reason_and_preserves_attempt() -> None:
+    admin, _, agent, _, order_id = assignment_setup()
+    other_agent = create_user(UserRole.DELIVERY_AGENT)
+    assign_and_progress(order_id, admin, agent, through="ASSIGNED")
+
+    early_failure = client.patch(
+        f"/agent/orders/{order_id}/status",
+        headers=auth_header(agent),
+        json={"target_status": "FAILED", "reason": "Customer unavailable"},
+    )
+    wrong_agent = client.patch(
+        f"/agent/orders/{order_id}/status",
+        headers=auth_header(other_agent),
+        json={"target_status": "FAILED", "reason": "Customer unavailable"},
+    )
+    missing_reason = client.patch(
+        f"/agent/orders/{order_id}/status",
+        headers=auth_header(agent),
+        json={"target_status": "FAILED", "reason": " "},
+    )
+
+    assert early_failure.status_code == 409
+    assert wrong_agent.status_code == 404
+    assert missing_reason.status_code == 422
+
+    for target in ["PICKED_UP", "IN_TRANSIT", "OUT_FOR_DELIVERY"]:
+        response = client.patch(
+            f"/agent/orders/{order_id}/status",
+            headers=auth_header(agent),
+            json={"target_status": target},
+        )
+        assert response.status_code == 200
+
+    failed = client.patch(
+        f"/agent/orders/{order_id}/status",
+        headers=auth_header(agent),
+        json={"target_status": "FAILED", "reason": "Customer unavailable"},
+    )
+
+    assert failed.status_code == 200
+    assert failed.json()["current_status"] == OrderStatus.FAILED
+    assert failed.json()["current_agent_id"] is None
+    with SessionLocal() as db:
+        attempt = db.scalar(
+            select(DeliveryAttempt).where(DeliveryAttempt.order_id == order_id)
+        )
+        profile = db.get(AgentProfile, agent.id)
+        event = db.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.order_id == order_id,
+                OutboxEvent.event_type == "ORDER_FAILED",
+            )
+        )
+        history = db.scalar(
+            select(OrderStatusHistory).where(
+                OrderStatusHistory.order_id == order_id,
+                OrderStatusHistory.to_status == OrderStatus.FAILED,
+            )
+        )
+        assert attempt is not None
+        assert profile is not None
+        assert event is not None
+        assert attempt.status == DeliveryAttemptStatus.FAILED
+        assert attempt.failure_reason == "Customer unavailable"
+        assert attempt.agent_id == agent.id
+        assert attempt.completed_at is not None
+        assert profile.availability == AgentAvailability.AVAILABLE
+        assert history is not None
+        assert notification_channels(db, event.id) == {
+            NotificationChannel.EMAIL,
+            NotificationChannel.SMS,
+        }
+
+
+def test_customer_reschedule_creates_new_attempt_and_notifications() -> None:
+    admin, customer, agent, ids, order_id = assignment_setup()
+    other_customer = create_user(UserRole.CUSTOMER)
+    fail_order(order_id, admin, agent)
+    future_date = (datetime.now(UTC) + timedelta(days=2)).date().isoformat()
+
+    non_owner = client.post(
+        f"/orders/{order_id}/reschedule",
+        headers=auth_header(other_customer),
+        json={"scheduled_date": future_date},
+    )
+    today = client.post(
+        f"/orders/{order_id}/reschedule",
+        headers=auth_header(customer),
+        json={"scheduled_date": datetime.now(UTC).date().isoformat()},
+    )
+    active_order_id = create_order(
+        customer_id=customer.id,
+        creator_id=customer.id,
+        pickup_zone_id=ids["pickup_zone_id"],
+        drop_zone_id=ids["drop_zone_id"],
+        rate_card_id=ids["rate_card_id"],
+    )
+    non_failed = client.post(
+        f"/orders/{active_order_id}/reschedule",
+        headers=auth_header(customer),
+        json={"scheduled_date": future_date},
+    )
+    rescheduled = client.post(
+        f"/orders/{order_id}/reschedule",
+        headers=auth_header(customer),
+        json={"scheduled_date": future_date},
+    )
+
+    assert non_owner.status_code == 404
+    assert today.status_code == 422
+    assert non_failed.status_code == 409
+    assert rescheduled.status_code == 200
+    assert rescheduled.json()["current_status"] == OrderStatus.RESCHEDULED
+    with SessionLocal() as db:
+        attempts = db.scalars(
+            select(DeliveryAttempt)
+            .where(DeliveryAttempt.order_id == order_id)
+            .order_by(DeliveryAttempt.attempt_number)
+        ).all()
+        event = db.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.order_id == order_id,
+                OutboxEvent.event_type == "ORDER_RESCHEDULED",
+            )
+        )
+        assert len(attempts) == 2
+        assert attempts[0].status == DeliveryAttemptStatus.FAILED
+        assert attempts[0].agent_id == agent.id
+        assert attempts[1].attempt_number == 2
+        assert attempts[1].agent_id is None
+        assert attempts[1].status == DeliveryAttemptStatus.PLANNED
+        assert attempts[1].scheduled_date.isoformat() == future_date
+        assert event is not None
+        assert event.payload["scheduled_date"] == future_date
+        assert notification_channels(db, event.id) == {
+            NotificationChannel.EMAIL,
+            NotificationChannel.SMS,
+        }
+
+
+def test_rescheduled_order_reassignment_uses_new_attempt_only() -> None:
+    admin, customer, agent_a, ids, order_id = assignment_setup()
+    with SessionLocal() as db:
+        profile = db.get(AgentProfile, agent_a.id)
+        assert profile is not None
+        profile.current_latitude = Decimal("12.900000")
+        profile.current_longitude = Decimal("80.100000")
+        db.commit()
+    agent_b = create_user(
+        UserRole.DELIVERY_AGENT,
+        availability=AgentAvailability.AVAILABLE,
+        latitude=Decimal("13.082800"),
+        longitude=Decimal("80.270800"),
+    )
+    fail_order(order_id, admin, agent_a)
+    future_date = (datetime.now(UTC) + timedelta(days=2)).date().isoformat()
+    assert client.post(
+        f"/orders/{order_id}/reschedule",
+        headers=auth_header(customer),
+        json={"scheduled_date": future_date},
+    ).status_code == 200
+
+    reassigned = client.post(
+        f"/admin/orders/{order_id}/auto-assign", headers=auth_header(admin)
+    )
+
+    assert reassigned.status_code == 200
+    assert reassigned.json()["current_agent_id"] == agent_b.id
+    with SessionLocal() as db:
+        attempts = db.scalars(
+            select(DeliveryAttempt)
+            .where(DeliveryAttempt.order_id == order_id)
+            .order_by(DeliveryAttempt.attempt_number)
+        ).all()
+        assert len(attempts) == 2
+        assert attempts[0].status == DeliveryAttemptStatus.FAILED
+        assert attempts[0].agent_id == agent_a.id
+        assert attempts[1].status == DeliveryAttemptStatus.PLANNED
+        assert attempts[1].agent_id == agent_b.id
+
+
+def test_notification_delivery_rows_created_for_status_events() -> None:
+    admin, _, agent, _, order_id = assignment_setup()
+    assign_and_progress(order_id, admin, agent, through="DELIVERED")
+
+    with SessionLocal() as db:
+        events = db.scalars(
+            select(OutboxEvent)
+            .where(
+                OutboxEvent.order_id == order_id,
+                OutboxEvent.event_type.in_(
+                    [
+                        "ORDER_ASSIGNED",
+                        "ORDER_PICKED_UP",
+                        "ORDER_IN_TRANSIT",
+                        "ORDER_OUT_FOR_DELIVERY",
+                        "ORDER_DELIVERED",
+                    ]
+                ),
+            )
+        ).all()
+        assert {event.event_type for event in events} == {
+            "ORDER_ASSIGNED",
+            "ORDER_PICKED_UP",
+            "ORDER_IN_TRANSIT",
+            "ORDER_OUT_FOR_DELIVERY",
+            "ORDER_DELIVERED",
+        }
+        for event in events:
+            assert notification_channels(db, event.id) == {
+                NotificationChannel.EMAIL,
+                NotificationChannel.SMS,
+            }
+
+
+def test_worker_success_mixed_retry_terminal_failure_and_idempotency() -> None:
+    order_id = create_worker_order()
+    with SessionLocal() as db:
+        event = db.scalar(select(OutboxEvent).where(OutboxEvent.order_id == order_id))
+        assert event is not None
+        email = NotificationDelivery(
+            event=event,
+            channel=NotificationChannel.EMAIL,
+            recipient="customer@example.com",
+            status=NotificationStatus.PENDING,
+        )
+        sms = NotificationDelivery(
+            event=event,
+            channel=NotificationChannel.SMS,
+            recipient="+15550000000",
+            status=NotificationStatus.PENDING,
+        )
+        db.add_all([email, sms])
+        db.commit()
+        event_id = event.id
+
+    email_provider = FakeEmailProvider(["email-1"])
+    sms_provider = FakeSmsProvider([ProviderSendError("temporary sms failure")])
+    with SessionLocal() as db:
+        processed = process_notification_batch(
+            db,
+            email_provider=email_provider,
+            sms_provider=sms_provider,
+        )
+    assert processed == 2
+
+    with SessionLocal() as db:
+        email = delivery_for(db, event_id, NotificationChannel.EMAIL)
+        sms = delivery_for(db, event_id, NotificationChannel.SMS)
+        assert email.status == NotificationStatus.SENT
+        assert email.attempt_count == 1
+        assert email.provider_message_id == "email-1"
+        assert sms.status == NotificationStatus.RETRY
+        assert sms.attempt_count == 1
+        assert sms.next_attempt_at is not None
+        sms.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+        db.commit()
+
+    sms_provider = FakeSmsProvider(["sms-2"])
+    with SessionLocal() as db:
+        processed = process_notification_batch(
+            db, email_provider=FakeEmailProvider([]), sms_provider=sms_provider
+        )
+    assert processed == 1
+    with SessionLocal() as db:
+        sms = delivery_for(db, event_id, NotificationChannel.SMS)
+        assert sms.status == NotificationStatus.SENT
+        assert sms.attempt_count == 2
+        assert sms.provider_message_id == "sms-2"
+
+    terminal_order_id = create_worker_order()
+    with SessionLocal() as db:
+        terminal_event = db.scalar(
+            select(OutboxEvent).where(OutboxEvent.order_id == terminal_order_id)
+        )
+        assert terminal_event is not None
+        terminal = NotificationDelivery(
+            event=terminal_event,
+            channel=NotificationChannel.EMAIL,
+            recipient="customer@example.com",
+            status=NotificationStatus.PENDING,
+            attempt_count=4,
+        )
+        sent = NotificationDelivery(
+            event=terminal_event,
+            channel=NotificationChannel.SMS,
+            recipient="+15550000000",
+            status=NotificationStatus.SENT,
+        )
+        db.add_all([terminal, sent])
+        db.commit()
+        terminal_event_id = terminal_event.id
+
+    failing_email = FakeEmailProvider([ProviderSendError("still down")])
+    sent_sms = FakeSmsProvider([])
+    with SessionLocal() as db:
+        processed = process_notification_batch(
+            db, email_provider=failing_email, sms_provider=sent_sms
+        )
+    assert processed == 1
+    assert sent_sms.sent == []
+    with SessionLocal() as db:
+        terminal = delivery_for(db, terminal_event_id, NotificationChannel.EMAIL)
+        assert terminal.status == NotificationStatus.FAILED
+        assert terminal.attempt_count == 5
+
+
+def test_worker_skips_not_yet_due_retry() -> None:
+    order_id = create_worker_order()
+    with SessionLocal() as db:
+        event = db.scalar(select(OutboxEvent).where(OutboxEvent.order_id == order_id))
+        assert event is not None
+        delivery = NotificationDelivery(
+            event=event,
+            channel=NotificationChannel.EMAIL,
+            recipient="customer@example.com",
+            status=NotificationStatus.RETRY,
+            attempt_count=1,
+            next_attempt_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        db.add(delivery)
+        db.commit()
+
+    provider = FakeEmailProvider(["unused"])
+    with SessionLocal() as db:
+        processed = process_notification_batch(db, email_provider=provider)
+
+    assert processed == 0
+    assert provider.sent == []
+
+
+def test_worker_missing_provider_config_retries_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    get_settings.cache_clear()
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("EMAIL_FROM", raising=False)
+    order_id = create_worker_order()
+    with SessionLocal() as db:
+        event = db.scalar(select(OutboxEvent).where(OutboxEvent.order_id == order_id))
+        assert event is not None
+        delivery = NotificationDelivery(
+            event=event,
+            channel=NotificationChannel.EMAIL,
+            recipient="customer@example.com",
+            status=NotificationStatus.PENDING,
+        )
+        db.add(delivery)
+        db.commit()
+        event_id = event.id
+
+    with SessionLocal() as db:
+        processed = process_notification_batch(db)
+
+    assert processed == 1
+    with SessionLocal() as db:
+        delivery = delivery_for(db, event_id, NotificationChannel.EMAIL)
+        assert delivery.status == NotificationStatus.RETRY
+        assert delivery.attempt_count == 1
+        assert "configuration is missing" in str(delivery.last_error)
+    get_settings.cache_clear()
+
+
+def assign_and_progress(
+    order_id: int, admin: User, agent: User, *, through: str
+) -> None:
+    assigned = client.post(
+        f"/admin/orders/{order_id}/assign",
+        headers=auth_header(admin),
+        json={"agent_id": agent.id},
+    )
+    assert assigned.status_code == 200
+    for target in ["PICKED_UP", "IN_TRANSIT", "OUT_FOR_DELIVERY", "DELIVERED"]:
+        if through == "ASSIGNED":
+            return
+        response = client.patch(
+            f"/agent/orders/{order_id}/status",
+            headers=auth_header(agent),
+            json={"target_status": target},
+        )
+        assert response.status_code == 200
+        if target == through:
+            return
+
+
+def fail_order(order_id: int, admin: User, agent: User) -> None:
+    assign_and_progress(order_id, admin, agent, through="OUT_FOR_DELIVERY")
+    failed = client.patch(
+        f"/agent/orders/{order_id}/status",
+        headers=auth_header(agent),
+        json={"target_status": "FAILED", "reason": "Customer unavailable"},
+    )
+    assert failed.status_code == 200
+
+
+def notification_channels(db, event_id: int) -> set[NotificationChannel]:
+    return set(
+        db.scalars(
+            select(NotificationDelivery.channel).where(
+                NotificationDelivery.event_id == event_id
+            )
+        ).all()
+    )
+
+
+def create_worker_order() -> int:
+    admin, customer, _, ids, _ = assignment_setup()
+    return create_order(
+        customer_id=customer.id,
+        creator_id=admin.id,
+        pickup_zone_id=ids["pickup_zone_id"],
+        drop_zone_id=ids["drop_zone_id"],
+        rate_card_id=ids["rate_card_id"],
+    )
+
+
+def delivery_for(db, event_id: int, channel: NotificationChannel) -> NotificationDelivery:
+    delivery = db.scalar(
+        select(NotificationDelivery).where(
+            NotificationDelivery.event_id == event_id,
+            NotificationDelivery.channel == channel,
+        )
+    )
+    assert delivery is not None
+    return delivery
+
+
+class FakeEmailProvider:
+    def __init__(self, outcomes: list[object]) -> None:
+        self.outcomes = outcomes
+        self.sent: list[tuple[str, str, str]] = []
+
+    def send(self, recipient: str, subject: str, body: str) -> ProviderResult:
+        self.sent.append((recipient, subject, body))
+        outcome = self.outcomes.pop(0) if self.outcomes else "email-id"
+        if isinstance(outcome, ProviderSendError):
+            raise outcome
+        return ProviderResult(message_id=str(outcome))
+
+
+class FakeSmsProvider:
+    def __init__(self, outcomes: list[object]) -> None:
+        self.outcomes = outcomes
+        self.sent: list[tuple[str, str]] = []
+
+    def send(self, recipient: str, message: str) -> ProviderResult:
+        self.sent.append((recipient, message))
+        outcome = self.outcomes.pop(0) if self.outcomes else "sms-id"
+        if isinstance(outcome, ProviderSendError):
+            raise outcome
+        return ProviderResult(message_id=str(outcome))
+
+
 def cleanup() -> None:
     with SessionLocal() as db:
         test_user_ids = select(User.id).where(User.email.endswith("@assignment-test.com"))
@@ -597,6 +1056,14 @@ def cleanup() -> None:
             )
         )
         db.execute(delete(DeliveryAttempt).where(DeliveryAttempt.order_id.in_(test_order_ids)))
+        test_event_ids = select(OutboxEvent.id).where(
+            OutboxEvent.order_id.in_(test_order_ids)
+        )
+        db.execute(
+            delete(NotificationDelivery).where(
+                NotificationDelivery.event_id.in_(test_event_ids)
+            )
+        )
         db.execute(delete(OutboxEvent).where(OutboxEvent.order_id.in_(test_order_ids)))
         db.execute(
             delete(OrderStatusHistory).where(OrderStatusHistory.order_id.in_(test_order_ids))

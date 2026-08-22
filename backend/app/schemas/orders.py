@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -25,6 +25,10 @@ class OrderInput(BaseModel):
 
 class AdminOrderCreateRequest(OrderInput):
     customer_id: int
+
+
+class RescheduleRequest(BaseModel):
+    scheduled_date: date
 
 
 class ResolvedAddressResponse(BaseModel):

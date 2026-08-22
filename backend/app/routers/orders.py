@@ -12,6 +12,7 @@ from app.schemas.orders import (
     OrderInput,
     OrderPage,
     QuoteResponse,
+    RescheduleRequest,
     TrackingResponse,
 )
 from app.services import geocoding
@@ -67,6 +68,34 @@ def list_orders(
     return order_service.list_customer_orders(
         db, customer_id=customer.id, page=page, page_size=page_size
     )
+
+
+@router.post("/{order_id}/reschedule", response_model=OrderDetail)
+def reschedule_order(
+    order_id: int,
+    payload: RescheduleRequest,
+    customer: Annotated[User, Depends(require_customer)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, object]:
+    try:
+        order = order_service.reschedule_order(
+            db,
+            order_id=order_id,
+            customer=customer,
+            scheduled_date=payload.scheduled_date,
+        )
+        db.commit()
+    except order_service.OrderNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except order_service.OrderValidationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except order_service.OrderStateConflictError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.refresh(order)
+    return order_detail(order)
 
 
 @router.get("/{order_id}", response_model=OrderDetail)

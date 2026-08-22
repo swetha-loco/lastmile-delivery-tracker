@@ -14,6 +14,8 @@ from app.models import (
     Area,
     CodSurcharge,
     DeliveryAttempt,
+    NotificationChannel,
+    NotificationDelivery,
     Order,
     OrderStatus,
     OrderStatusHistory,
@@ -476,6 +478,14 @@ def test_customer_order_creation_snapshot_history_outbox_list_detail_tracking(mo
         event = db.scalar(select(OutboxEvent).where(OutboxEvent.order_id == order_id))
         assert event is not None
         assert event.event_type == "ORDER_CREATED"
+        channels = set(
+            db.scalars(
+                select(NotificationDelivery.channel).where(
+                    NotificationDelivery.event_id == event.id
+                )
+            ).all()
+        )
+        assert channels == {NotificationChannel.EMAIL, NotificationChannel.SMS}
         assert db.scalar(select(DeliveryAttempt).where(DeliveryAttempt.order_id == order_id)) is None
 
     listing = client.get("/orders", headers=auth_header(customer))
@@ -595,6 +605,14 @@ def cleanup() -> None:
             )
         )
         db.execute(delete(DeliveryAttempt).where(DeliveryAttempt.order_id.in_(test_order_ids)))
+        test_event_ids = select(OutboxEvent.id).where(
+            OutboxEvent.order_id.in_(test_order_ids)
+        )
+        db.execute(
+            delete(NotificationDelivery).where(
+                NotificationDelivery.event_id.in_(test_event_ids)
+            )
+        )
         db.execute(delete(OutboxEvent).where(OutboxEvent.order_id.in_(test_order_ids)))
         db.execute(delete(OrderStatusHistory).where(OrderStatusHistory.order_id.in_(test_order_ids)))
         db.execute(delete(Order).where(Order.id.in_(test_order_ids)))

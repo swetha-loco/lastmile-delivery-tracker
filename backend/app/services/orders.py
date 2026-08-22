@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from math import ceil
 
@@ -9,11 +10,11 @@ from app.models import (
     Area,
     CodSurcharge,
     DeliveryAttempt,
+    DeliveryAttemptStatus,
     Order,
     OrderStatus,
     OrderStatusHistory,
     OrderType,
-    OutboxEvent,
     PaymentType,
     RateCard,
     User,
@@ -23,6 +24,9 @@ from app.models import (
 from app.schemas.orders import OrderInput
 from app.services import geocoding
 from app.services.configuration import normalize_postal_code
+from app.services.lifecycle import current_attempt, transition_order
+from app.services.lifecycle_time import now_utc
+from app.services.notifications import create_order_event
 from app.services.pricing import MissingCodSurchargeError, PriceBreakdown, calculate_price
 
 
@@ -135,21 +139,50 @@ def create_confirmed_order(
             actor_role=creator.role,
         )
     )
-    db.add(
-        OutboxEvent(
-            event_type="ORDER_CREATED",
-            order=order,
-            payload={
-                "order_id": order.id,
-                "customer_id": customer.id,
-                "customer_email": customer.email,
-                "customer_phone": customer.phone,
-                "status": OrderStatus.CREATED.value,
-                "total_charge": str(order.total_charge),
-            },
-        )
+    create_order_event(
+        db,
+        order=order,
+        event_type="ORDER_CREATED",
+        payload={
+            "order_id": order.id,
+            "customer_id": customer.id,
+            "status": OrderStatus.CREATED.value,
+            "total_charge": str(order.total_charge),
+        },
     )
     db.flush()
+    return order
+
+
+def reschedule_order(
+    db: Session, *, order_id: int, customer: User, scheduled_date: date
+) -> Order:
+    order = db.scalar(select(Order).where(Order.id == order_id).with_for_update())
+    if order is None or order.customer_id != customer.id:
+        raise OrderNotFoundError("Order not found")
+    if order.current_status != OrderStatus.FAILED:
+        raise OrderStateConflictError("Order must be FAILED to reschedule")
+    attempt = current_attempt(db, order)
+    if attempt is None or attempt.status != DeliveryAttemptStatus.FAILED:
+        raise OrderStateConflictError("Order has no failed attempt to reschedule")
+    if scheduled_date <= now_utc().date():
+        raise OrderValidationError("Scheduled date must be in the future")
+
+    new_attempt = DeliveryAttempt(
+        order=order,
+        attempt_number=attempt.attempt_number + 1,
+        scheduled_date=scheduled_date,
+        status=DeliveryAttemptStatus.PLANNED,
+    )
+    db.add(new_attempt)
+    db.flush()
+    transition_order(
+        db,
+        order=order,
+        actor=customer,
+        target_status=OrderStatus.RESCHEDULED,
+        event_payload={"scheduled_date": scheduled_date.isoformat()},
+    )
     return order
 
 
@@ -284,4 +317,16 @@ class PricingConfigurationError(Exception):
 
 
 class UnsupportedServiceAreaError(Exception):
+    pass
+
+
+class OrderNotFoundError(Exception):
+    pass
+
+
+class OrderStateConflictError(Exception):
+    pass
+
+
+class OrderValidationError(Exception):
     pass

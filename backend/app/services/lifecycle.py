@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,9 +10,10 @@ from app.models import (
     Order,
     OrderStatus,
     OrderStatusHistory,
-    OutboxEvent,
     User,
 )
+from app.services.lifecycle_time import now_utc
+from app.services.notifications import create_order_event
 
 
 NORMAL_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
@@ -23,7 +22,8 @@ NORMAL_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.ASSIGNED: {OrderStatus.PICKED_UP},
     OrderStatus.PICKED_UP: {OrderStatus.IN_TRANSIT},
     OrderStatus.IN_TRANSIT: {OrderStatus.OUT_FOR_DELIVERY},
-    OrderStatus.OUT_FOR_DELIVERY: {OrderStatus.DELIVERED},
+    OrderStatus.OUT_FOR_DELIVERY: {OrderStatus.DELIVERED, OrderStatus.FAILED},
+    OrderStatus.FAILED: {OrderStatus.RESCHEDULED},
 }
 
 AGENT_TARGET_STATUSES = {
@@ -31,6 +31,7 @@ AGENT_TARGET_STATUSES = {
     OrderStatus.IN_TRANSIT,
     OrderStatus.OUT_FOR_DELIVERY,
     OrderStatus.DELIVERED,
+    OrderStatus.FAILED,
 }
 
 EVENT_TYPES: dict[OrderStatus, str] = {
@@ -39,8 +40,9 @@ EVENT_TYPES: dict[OrderStatus, str] = {
     OrderStatus.IN_TRANSIT: "ORDER_IN_TRANSIT",
     OrderStatus.OUT_FOR_DELIVERY: "ORDER_OUT_FOR_DELIVERY",
     OrderStatus.DELIVERED: "ORDER_DELIVERED",
+    OrderStatus.FAILED: "ORDER_FAILED",
+    OrderStatus.RESCHEDULED: "ORDER_RESCHEDULED",
     OrderStatus.CREATED: "ORDER_STATUS_OVERRIDDEN",
-    OrderStatus.RESCHEDULED: "ORDER_STATUS_OVERRIDDEN",
 }
 
 
@@ -56,14 +58,22 @@ def transition_order(
     target_status: OrderStatus,
     reason: str | None = None,
     override: bool = False,
+    event_payload: dict[str, object] | None = None,
 ) -> None:
+    cleaned_reason = reason.strip() if reason else None
+    if target_status == OrderStatus.FAILED and not cleaned_reason:
+        raise LifecycleConflictError("Failure reason is required")
     if override:
-        apply_override_consistency(db, order=order, target_status=target_status)
+        apply_override_consistency(
+            db, order=order, target_status=target_status, reason=cleaned_reason
+        )
     else:
         allowed_targets = NORMAL_TRANSITIONS.get(order.current_status, set())
         if target_status not in allowed_targets:
             raise LifecycleConflictError("Invalid status transition")
-        apply_normal_attempt_changes(db, order=order, target_status=target_status)
+        apply_normal_attempt_changes(
+            db, order=order, target_status=target_status, reason=cleaned_reason
+        )
 
     from_status = order.current_status
     order.current_status = target_status
@@ -74,27 +84,31 @@ def transition_order(
             to_status=target_status,
             actor_id=actor.id,
             actor_role=actor.role,
-            reason=reason,
+            reason=cleaned_reason,
         )
     )
-    db.add(
-        OutboxEvent(
-            event_type=EVENT_TYPES.get(target_status, "ORDER_STATUS_OVERRIDDEN"),
-            order=order,
-            payload={
-                "order_id": order.id,
-                "customer_id": order.customer_id,
-                "status": target_status.value,
-                "actor_id": actor.id,
-                "actor_role": actor.role.value,
-            },
-        )
+    payload = {
+        "order_id": order.id,
+        "customer_id": order.customer_id,
+        "status": target_status.value,
+        "actor_id": actor.id,
+        "actor_role": actor.role.value,
+    }
+    if cleaned_reason:
+        payload["reason"] = cleaned_reason
+    if event_payload:
+        payload.update(event_payload)
+    create_order_event(
+        db,
+        order=order,
+        event_type=EVENT_TYPES.get(target_status, "ORDER_STATUS_OVERRIDDEN"),
+        payload=payload,
     )
     db.flush()
 
 
 def apply_normal_attempt_changes(
-    db: Session, *, order: Order, target_status: OrderStatus
+    db: Session, *, order: Order, target_status: OrderStatus, reason: str | None = None
 ) -> None:
     if target_status == OrderStatus.PICKED_UP:
         attempt = require_current_attempt(db, order)
@@ -106,14 +120,17 @@ def apply_normal_attempt_changes(
         attempt.status = DeliveryAttemptStatus.DELIVERED
         attempt.completed_at = now_utc()
         release_current_agent(order)
+    elif target_status == OrderStatus.FAILED:
+        attempt = require_current_attempt(db, order)
+        attempt.status = DeliveryAttemptStatus.FAILED
+        attempt.failure_reason = reason
+        attempt.completed_at = now_utc()
+        release_current_agent(order)
 
 
 def apply_override_consistency(
-    db: Session, *, order: Order, target_status: OrderStatus
+    db: Session, *, order: Order, target_status: OrderStatus, reason: str | None = None
 ) -> None:
-    if target_status == OrderStatus.FAILED:
-        raise LifecycleConflictError("Failed delivery handling is not implemented yet")
-
     attempt = current_attempt(db, order)
     if target_status in {
         OrderStatus.PICKED_UP,
@@ -130,6 +147,13 @@ def apply_override_consistency(
         if attempt is not None:
             attempt.status = DeliveryAttemptStatus.DELIVERED
             attempt.completed_at = now_utc()
+        release_current_agent(order)
+    elif target_status == OrderStatus.FAILED:
+        if order.current_agent is None or attempt is None:
+            raise LifecycleConflictError("Order has no active assigned attempt")
+        attempt.status = DeliveryAttemptStatus.FAILED
+        attempt.failure_reason = reason
+        attempt.completed_at = now_utc()
         release_current_agent(order)
     elif target_status in {OrderStatus.CREATED, OrderStatus.RESCHEDULED}:
         release_current_agent(order)
@@ -162,7 +186,3 @@ def release_current_agent(order: Order) -> None:
     if order.current_agent is not None:
         order.current_agent.availability = AgentAvailability.AVAILABLE
     order.current_agent_id = None
-
-
-def now_utc() -> datetime:
-    return datetime.now(UTC)

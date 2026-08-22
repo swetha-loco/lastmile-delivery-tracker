@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.dependencies import require_delivery_agent
-from app.models import OrderStatus, User
+from app.models import User
 from app.schemas.agent import (
     AgentAvailabilityRequest,
     AgentLocationRequest,
@@ -90,10 +90,6 @@ def update_order_status(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
     if payload.target_status not in lifecycle.AGENT_TARGET_STATUSES:
         raise HTTPException(status_code=409, detail="Invalid agent status target")
-    if payload.target_status == OrderStatus.FAILED:
-        raise HTTPException(
-            status_code=409, detail="Failed delivery handling is not implemented yet"
-        )
     try:
         lifecycle.transition_order(
             db,

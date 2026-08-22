@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     demo_password: str = Field(default="change-me-for-local-demo", alias="DEMO_PASSWORD")
     geoapify_api_key: str = Field(default="", alias="GEOAPIFY_API_KEY")
     geocoding_country_code: str = Field(default="in", alias="GEOCODING_COUNTRY_CODE")
+    resend_api_key: str = Field(default="", alias="RESEND_API_KEY")
+    email_from: str = Field(default="", alias="EMAIL_FROM")
+    twilio_account_sid: str = Field(default="", alias="TWILIO_ACCOUNT_SID")
+    twilio_auth_token: str = Field(default="", alias="TWILIO_AUTH_TOKEN")
+    twilio_from_number: str = Field(default="", alias="TWILIO_FROM_NUMBER")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
