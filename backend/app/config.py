@@ -28,6 +28,8 @@ class Settings(BaseSettings):
         default=60, alias="ACCESS_TOKEN_EXPIRE_MINUTES"
     )
     demo_password: str = Field(default="change-me-for-local-demo", alias="DEMO_PASSWORD")
+    geoapify_api_key: str = Field(default="", alias="GEOAPIFY_API_KEY")
+    geocoding_country_code: str = Field(default="in", alias="GEOCODING_COUNTRY_CODE")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

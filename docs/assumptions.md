@@ -268,3 +268,12 @@ core business behavior.
   first, then perform production deployment near the end of implementation.
 - Easy to change later: deployment configuration can be adjusted without
   changing the modular-monolith application design.
+
+## DECIDED: Demo Service Areas
+
+- Assignment requires: admins manage areas assigned to zones.
+- Current demo seed: Chennai service postcodes 600001, 600002, 600003, 600004,
+  and 600020 are seeded for local/evaluator development.
+- Initial assumption: mapping those postcodes into Central, North, and South is
+  application demo configuration, not an official India Post zone model.
+- Easy to change later: admins can adjust areas/zones through configuration APIs.

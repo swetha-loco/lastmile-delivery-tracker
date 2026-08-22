@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.dependencies import require_admin
-from app.models import Area, CodSurcharge, OrderType, RateCard, User, Zone
+from app.models import Area, CodSurcharge, OrderStatus, OrderType, RateCard, User, UserRole, Zone
 from app.schemas.admin import (
     AgentCreateRequest,
     AreaCreateRequest,
@@ -23,9 +23,13 @@ from app.schemas.admin import (
     ZoneResponse,
     ZoneUpdateRequest,
 )
+from app.schemas.orders import AdminOrderCreateRequest, OrderDetail, OrderPage
 from app.schemas.users import AgentPage, UserPublic
 from app.services import agents as agent_service
 from app.services import configuration as config_service
+from app.services import geocoding
+from app.services import orders as order_service
+from app.routers.orders import order_detail, order_http_exception
 
 router = APIRouter(
     prefix="/admin",
@@ -239,6 +243,58 @@ def put_cod_surcharge(
     db.commit()
     db.refresh(surcharge)
     return surcharge
+
+
+@router.post("/orders", response_model=OrderDetail, status_code=status.HTTP_201_CREATED)
+def create_order_for_customer(
+    payload: AdminOrderCreateRequest,
+    admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, object]:
+    customer = db.get(User, payload.customer_id)
+    if customer is None:
+        raise not_found("Customer not found")
+    if customer.role != UserRole.CUSTOMER:
+        raise HTTPException(
+            status_code=422,
+            detail="Target user must be a customer",
+        )
+    try:
+        order = order_service.create_confirmed_order(
+            db, payload=payload, customer=customer, creator=admin
+        )
+        db.commit()
+    except (
+        geocoding.GeocodingNoResultError,
+        geocoding.GeocodingMissingPostcodeError,
+        geocoding.GeocodingConfigurationError,
+        geocoding.GeocodingProviderError,
+        order_service.UnsupportedServiceAreaError,
+        order_service.PricingConfigurationError,
+    ) as exc:
+        db.rollback()
+        raise order_http_exception(exc) from exc
+    db.refresh(order)
+    return order_detail(order)
+
+
+@router.get("/orders", response_model=OrderPage)
+def list_orders(
+    db: Annotated[Session, Depends(get_db)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    status: OrderStatus | None = None,
+    zone_id: int | None = None,
+    agent_id: int | None = None,
+) -> dict[str, object]:
+    return order_service.list_admin_orders(
+        db,
+        page=page,
+        page_size=page_size,
+        status=status,
+        zone_id=zone_id,
+        agent_id=agent_id,
+    )
 
 
 def conflict(detail: str) -> HTTPException:

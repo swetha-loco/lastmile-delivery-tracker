@@ -21,11 +21,13 @@ from app.security import hash_password
 
 ZONE_NAMES = ["Central", "North", "South"]
 AREA_ROWS = [
-    ("Central Demo Area 1", "DEMO1001", "Central"),
-    ("Central Demo Area 2", "DEMO1002", "Central"),
-    ("North Demo Area", "DEMO2001", "North"),
-    ("South Demo Area", "DEMO3001", "South"),
+    ("Chennai GPO", "600001", "Central"),
+    ("Anna Road", "600002", "Central"),
+    ("Parktown", "600003", "North"),
+    ("Mylapore", "600004", "South"),
+    ("Adyar", "600020", "South"),
 ]
+LEGACY_DEMO_POSTAL_CODES = ["DEMO1001", "DEMO1002", "DEMO2001", "DEMO3001"]
 COD_SURCHARGES = {
     OrderType.B2B: Decimal("10.00"),
     OrderType.B2C: Decimal("25.00"),
@@ -66,6 +68,11 @@ def seed_configuration(db: Session) -> None:
             area.name = name
             area.zone = zones[zone_name]
             area.is_active = True
+
+    for postal_code in LEGACY_DEMO_POSTAL_CODES:
+        area = db.scalar(select(Area).where(Area.postal_code == postal_code))
+        if area is not None:
+            area.is_active = False
 
     db.flush()
 
