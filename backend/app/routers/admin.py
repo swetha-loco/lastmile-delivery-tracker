@@ -8,7 +8,17 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.dependencies import require_admin
-from app.models import Area, CodSurcharge, OrderStatus, OrderType, RateCard, User, UserRole, Zone
+from app.models import (
+    Area,
+    CodSurcharge,
+    Order,
+    OrderStatus,
+    OrderType,
+    RateCard,
+    User,
+    UserRole,
+    Zone,
+)
 from app.schemas.admin import (
     AgentCreateRequest,
     AreaCreateRequest,
@@ -16,6 +26,8 @@ from app.schemas.admin import (
     AreaUpdateRequest,
     CodSurchargePutRequest,
     CodSurchargeResponse,
+    ManualAssignRequest,
+    OverrideStatusRequest,
     RateCardCreateRequest,
     RateCardResponse,
     RateCardUpdateRequest,
@@ -26,8 +38,10 @@ from app.schemas.admin import (
 from app.schemas.orders import AdminOrderCreateRequest, OrderDetail, OrderPage
 from app.schemas.users import AgentPage, UserPublic
 from app.services import agents as agent_service
+from app.services import assignment
 from app.services import configuration as config_service
 from app.services import geocoding
+from app.services import lifecycle
 from app.services import orders as order_service
 from app.routers.orders import order_detail, order_http_exception
 
@@ -295,6 +309,74 @@ def list_orders(
         zone_id=zone_id,
         agent_id=agent_id,
     )
+
+
+@router.post("/orders/{order_id}/assign", response_model=OrderDetail)
+def assign_order(
+    order_id: int,
+    payload: ManualAssignRequest,
+    admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, object]:
+    try:
+        order = assignment.assign_order_to_agent(
+            db, order_id=order_id, agent_id=payload.agent_id, actor=admin
+        )
+        db.commit()
+    except assignment.AssignmentNotFoundError as exc:
+        db.rollback()
+        raise not_found(str(exc)) from exc
+    except assignment.AssignmentConflictError as exc:
+        db.rollback()
+        raise conflict(str(exc)) from exc
+    db.refresh(order)
+    return order_detail(order)
+
+
+@router.post("/orders/{order_id}/auto-assign", response_model=OrderDetail)
+def auto_assign_order(
+    order_id: int,
+    admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, object]:
+    try:
+        order = assignment.auto_assign_order(db, order_id=order_id, actor=admin)
+        db.commit()
+    except assignment.AssignmentNotFoundError as exc:
+        db.rollback()
+        raise not_found(str(exc)) from exc
+    except assignment.AssignmentConflictError as exc:
+        db.rollback()
+        raise conflict(str(exc)) from exc
+    db.refresh(order)
+    return order_detail(order)
+
+
+@router.post("/orders/{order_id}/override-status", response_model=OrderDetail)
+def override_order_status(
+    order_id: int,
+    payload: OverrideStatusRequest,
+    admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, object]:
+    order = db.scalar(select(Order).where(Order.id == order_id).with_for_update())
+    if order is None:
+        raise not_found("Order not found")
+    try:
+        lifecycle.transition_order(
+            db,
+            order=order,
+            actor=admin,
+            target_status=payload.target_status,
+            reason=payload.reason,
+            override=True,
+        )
+        db.commit()
+    except lifecycle.LifecycleConflictError as exc:
+        db.rollback()
+        raise conflict(str(exc)) from exc
+    db.refresh(order)
+    return order_detail(order)
 
 
 def conflict(detail: str) -> HTTPException:

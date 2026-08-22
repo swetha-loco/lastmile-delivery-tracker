@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from app.models import OrderType
+from app.models import OrderStatus, OrderType
 from app.schemas.auth import clean_required
 
 
@@ -136,3 +136,17 @@ class CodSurchargeResponse(BaseModel):
     is_active: bool
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ManualAssignRequest(BaseModel):
+    agent_id: int
+
+
+class OverrideStatusRequest(BaseModel):
+    target_status: OrderStatus
+    reason: str = Field(max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def clean_reason(cls, value: str) -> str:
+        return clean_required(value)

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models import (
     Area,
     CodSurcharge,
+    DeliveryAttempt,
     Order,
     OrderStatus,
     OrderStatusHistory,
@@ -183,9 +184,33 @@ def get_visible_order(db: Session, *, order_id: int, user: User) -> Order | None
         return order
     if user.role == UserRole.CUSTOMER and order.customer_id == user.id:
         return order
-    if user.role == UserRole.DELIVERY_AGENT and order.current_agent_id == user.id:
-        return order
+    if user.role == UserRole.DELIVERY_AGENT:
+        if order.current_agent_id == user.id or has_agent_attempt(
+            db, order_id=order.id, agent_id=user.id
+        ):
+            return order
     return None
+
+
+def lock_agent_order(db: Session, *, order_id: int, agent_id: int) -> Order | None:
+    order = db.scalar(select(Order).where(Order.id == order_id).with_for_update())
+    if order is None or order.current_agent_id != agent_id:
+        return None
+    return order
+
+
+def has_agent_attempt(db: Session, *, order_id: int, agent_id: int) -> bool:
+    return (
+        db.scalar(
+            select(DeliveryAttempt.id)
+            .where(
+                DeliveryAttempt.order_id == order_id,
+                DeliveryAttempt.agent_id == agent_id,
+            )
+            .limit(1)
+        )
+        is not None
+    )
 
 
 def list_customer_orders(
