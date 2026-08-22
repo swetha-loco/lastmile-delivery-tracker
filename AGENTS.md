@@ -21,8 +21,10 @@ requirements distinct from implementation assumptions.
   Alembic, PyJWT, `pwdlib` with Argon2, pytest.
 - Frontend: React, TypeScript, Vite, React Router, Tailwind CSS.
 - Integrations: Geoapify, Resend, and Twilio behind small provider boundaries.
-- Deployment target: Vercel frontend; Railway FastAPI, PostgreSQL, and
-  notification worker.
+- Deployment target: Vercel frontend; Render FastAPI web service, PostgreSQL,
+  and later notification/background worker.
+- Deployment policy: complete and validate required application functionality
+  locally first, then deploy near the end of implementation.
 - Architecture: modular monolith.
 - Default backend flow: router -> domain/service logic -> SQLAlchemy/PostgreSQL.
 

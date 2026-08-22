@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     )
     app_env: str = Field(default="development", alias="APP_ENV")
     frontend_url: str = Field(default="http://localhost:5173", alias="FRONTEND_URL")
+    jwt_secret: str = Field(
+        default="change-me-for-local-development-secret", alias="JWT_SECRET"
+    )
+    access_token_expire_minutes: int = Field(
+        default=60, alias="ACCESS_TOKEN_EXPIRE_MINUTES"
+    )
+    demo_password: str = Field(default="change-me-for-local-demo", alias="DEMO_PASSWORD")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -218,11 +218,13 @@ High-level frontend areas are expected to include:
 ## Planned Deployment Topology
 
 - Vercel hosts the React/Vite frontend.
-- Railway hosts the FastAPI backend.
-- Railway hosts PostgreSQL.
-- Railway hosts a separate notification worker process.
+- Render hosts the FastAPI backend as a web service.
+- Render hosts PostgreSQL.
+- Render hosts a separate notification/background worker process later.
 
-Deployment configuration will be added later.
+Deployment policy: complete and validate the required application locally first,
+then perform production deployment near the end of implementation. Deployment
+configuration will be added later.
 
 ## Major Transaction Boundaries
 

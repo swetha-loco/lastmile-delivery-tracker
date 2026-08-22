@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
+from app.routers.admin import router as admin_router
+from app.routers.auth import router as auth_router
 
 
 app = FastAPI(title="Last-Mile Delivery Tracker API")
@@ -17,9 +19,12 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_url],
     allow_credentials=False,
-    allow_methods=["GET"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth_router)
+app.include_router(admin_router)
 
 
 @app.get("/health")

@@ -257,3 +257,14 @@ does not drift.
 No known unresolved planning item currently blocks Phase 1 implementation. New
 questions should be recorded here only if they affect schema, API contract, or
 core business behavior.
+
+## DECIDED: Deployment Target And Timing
+
+- Assignment deliverable requires: a hosted application URL eventually.
+- Current implementation target: Vercel for the React/Vite frontend, Render for
+  the FastAPI web service, Render PostgreSQL, and a later Render
+  notification/background worker.
+- Deployment policy: complete and validate the required application locally
+  first, then perform production deployment near the end of implementation.
+- Easy to change later: deployment configuration can be adjusted without
+  changing the modular-monolith application design.

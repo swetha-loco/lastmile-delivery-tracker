@@ -108,7 +108,9 @@ Returns `201 Created`.
 
 Public.
 
-Authenticates a user and returns a bearer access token.
+Authenticates a user and returns a bearer access token. Implementation uses
+FastAPI's standard OAuth2 password form: `username` contains the user's email,
+and `password` contains the user's password.
 
 ### GET /auth/me
 
