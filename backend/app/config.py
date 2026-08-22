@@ -10,6 +10,7 @@ class Settings(BaseSettings):
         alias="DATABASE_URL",
     )
     app_env: str = Field(default="development", alias="APP_ENV")
+    frontend_url: str = Field(default="http://localhost:5173", alias="FRONTEND_URL")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
