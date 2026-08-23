@@ -16,8 +16,8 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  if (user?.role === 'CUSTOMER') {
-    return <Navigate replace to="/dashboard" />
+  if (user) {
+    return <Navigate replace to={homeForRole(user.role)} />
   }
 
   const from = (location.state as { from?: string } | null)?.from ?? '/dashboard'
@@ -27,8 +27,10 @@ export default function LoginPage() {
     setError('')
     setIsSubmitting(true)
     try {
-      await login(email, password)
-      navigate(from, { replace: true })
+      const signedInUser = await login(email, password)
+      navigate(from === '/dashboard' ? homeForRole(signedInUser.role) : from, {
+        replace: true,
+      })
     } catch (exc) {
       setError(exc instanceof ApiError ? exc.message : 'Unable to sign in')
     } finally {
@@ -75,6 +77,12 @@ export default function LoginPage() {
       </form>
     </AuthFrame>
   )
+}
+
+function homeForRole(role: string): string {
+  if (role === 'ADMIN') return '/admin/orders'
+  if (role === 'DELIVERY_AGENT') return '/agent'
+  return '/dashboard'
 }
 
 export function AuthFrame({

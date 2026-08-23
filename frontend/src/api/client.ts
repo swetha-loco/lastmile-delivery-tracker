@@ -3,6 +3,7 @@ const apiBaseUrl = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')
 export type UserRole = 'CUSTOMER' | 'DELIVERY_AGENT' | 'ADMIN'
 export type OrderType = 'B2B' | 'B2C'
 export type PaymentType = 'PREPAID' | 'COD'
+export type AgentAvailability = 'AVAILABLE' | 'BUSY' | 'OFFLINE'
 export type OrderStatus =
   | 'CREATED'
   | 'ASSIGNED'
@@ -87,6 +88,11 @@ export type OrderPage = {
   pages: number
 }
 
+export type PageQuery = {
+  page?: number
+  pageSize?: number
+}
+
 export type OrderDetail = OrderSummary & {
   customer_id: number
   created_by_id: number
@@ -125,6 +131,67 @@ export type TrackingResponse = {
   order_id: number
   current_status: OrderStatus
   history: TrackingHistoryEntry[]
+}
+
+export type AgentPublic = {
+  id: number
+  name: string
+  email: string
+  phone: string | null
+  availability: AgentAvailability
+  current_zone_id: number | null
+  current_latitude: string | null
+  current_longitude: string | null
+  location_updated_at: string | null
+  last_assigned_at: string | null
+}
+
+export type AgentPage = {
+  items: AgentPublic[]
+  page: number
+  page_size: number
+  total: number
+  pages: number
+}
+
+export type AgentProfile = {
+  user_id: number
+  availability: AgentAvailability
+  current_latitude: string | null
+  current_longitude: string | null
+  current_zone_id: number | null
+  location_updated_at: string | null
+  last_assigned_at: string | null
+}
+
+export type Zone = {
+  id: number
+  name: string
+  is_active: boolean
+}
+
+export type Area = {
+  id: number
+  name: string
+  postal_code: string
+  zone_id: number
+  is_active: boolean
+}
+
+export type RateCard = {
+  id: number
+  origin_zone_id: number
+  destination_zone_id: number
+  order_type: OrderType
+  rate_per_kg: string
+  is_active: boolean
+}
+
+export type CodSurcharge = {
+  id: number
+  order_type: OrderType
+  amount: string
+  is_active: boolean
 }
 
 export class ApiError extends Error {
@@ -248,6 +315,25 @@ export async function listOrders(
   return request<OrderPage>(`/orders?page=${page}&page_size=${pageSize}`, { token })
 }
 
+export async function listAdminOrders(
+  token: string,
+  filters: {
+    page?: number
+    pageSize?: number
+    status?: string
+    zoneId?: string
+    agentId?: string
+  } = {},
+): Promise<OrderPage> {
+  const params = new URLSearchParams()
+  params.set('page', String(filters.page ?? 1))
+  params.set('page_size', String(filters.pageSize ?? 20))
+  if (filters.status) params.set('status', filters.status)
+  if (filters.zoneId) params.set('zone_id', filters.zoneId)
+  if (filters.agentId) params.set('agent_id', filters.agentId)
+  return request<OrderPage>(`/admin/orders?${params.toString()}`, { token })
+}
+
 export async function getOrder(token: string, orderId: string): Promise<OrderDetail> {
   return request<OrderDetail>(`/orders/${orderId}`, { token })
 }
@@ -268,5 +354,190 @@ export async function rescheduleOrder(
     method: 'POST',
     token,
     body: { scheduled_date: scheduledDate },
+  })
+}
+
+export async function listAgents(
+  token: string,
+  page = 1,
+  pageSize = 100,
+): Promise<AgentPage> {
+  return request<AgentPage>(`/admin/agents?page=${page}&page_size=${pageSize}`, { token })
+}
+
+export async function createAgent(
+  token: string,
+  payload: { name: string; email: string; phone?: string; password: string },
+): Promise<User> {
+  return request<User>('/admin/agents', { method: 'POST', token, body: payload })
+}
+
+export async function assignOrder(
+  token: string,
+  orderId: number,
+  agentId: number,
+): Promise<OrderDetail> {
+  return request<OrderDetail>(`/admin/orders/${orderId}/assign`, {
+    method: 'POST',
+    token,
+    body: { agent_id: agentId },
+  })
+}
+
+export async function autoAssignOrder(
+  token: string,
+  orderId: number,
+): Promise<OrderDetail> {
+  return request<OrderDetail>(`/admin/orders/${orderId}/auto-assign`, {
+    method: 'POST',
+    token,
+  })
+}
+
+export async function overrideOrderStatus(
+  token: string,
+  orderId: number,
+  targetStatus: OrderStatus,
+  reason: string,
+): Promise<OrderDetail> {
+  return request<OrderDetail>(`/admin/orders/${orderId}/override-status`, {
+    method: 'POST',
+    token,
+    body: { target_status: targetStatus, reason },
+  })
+}
+
+export async function listZones(token: string): Promise<Zone[]> {
+  return request<Zone[]>('/admin/zones', { token })
+}
+
+export async function createZone(
+  token: string,
+  payload: { name: string; is_active?: boolean },
+): Promise<Zone> {
+  return request<Zone>('/admin/zones', { method: 'POST', token, body: payload })
+}
+
+export async function updateZone(
+  token: string,
+  zoneId: number,
+  payload: Partial<Pick<Zone, 'name' | 'is_active'>>,
+): Promise<Zone> {
+  return request<Zone>(`/admin/zones/${zoneId}`, { method: 'PATCH', token, body: payload })
+}
+
+export async function listAreas(token: string, zoneId?: number): Promise<Area[]> {
+  return request<Area[]>(`/admin/areas${zoneId ? `?zone_id=${zoneId}` : ''}`, { token })
+}
+
+export async function createArea(
+  token: string,
+  payload: { name: string; postal_code: string; zone_id: number; is_active?: boolean },
+): Promise<Area> {
+  return request<Area>('/admin/areas', { method: 'POST', token, body: payload })
+}
+
+export async function updateArea(
+  token: string,
+  areaId: number,
+  payload: Partial<Pick<Area, 'name' | 'postal_code' | 'zone_id' | 'is_active'>>,
+): Promise<Area> {
+  return request<Area>(`/admin/areas/${areaId}`, { method: 'PATCH', token, body: payload })
+}
+
+export async function listRateCards(
+  token: string,
+  filters: { originZoneId?: string; destinationZoneId?: string; orderType?: string } = {},
+): Promise<RateCard[]> {
+  const params = new URLSearchParams()
+  if (filters.originZoneId) params.set('origin_zone_id', filters.originZoneId)
+  if (filters.destinationZoneId) params.set('destination_zone_id', filters.destinationZoneId)
+  if (filters.orderType) params.set('order_type', filters.orderType)
+  const query = params.toString()
+  return request<RateCard[]>(`/admin/rate-cards${query ? `?${query}` : ''}`, { token })
+}
+
+export async function createRateCard(
+  token: string,
+  payload: {
+    origin_zone_id: number
+    destination_zone_id: number
+    order_type: OrderType
+    rate_per_kg: string
+    is_active?: boolean
+  },
+): Promise<RateCard> {
+  return request<RateCard>('/admin/rate-cards', { method: 'POST', token, body: payload })
+}
+
+export async function updateRateCard(
+  token: string,
+  rateCardId: number,
+  payload: { rate_per_kg?: string; is_active?: boolean },
+): Promise<RateCard> {
+  return request<RateCard>(`/admin/rate-cards/${rateCardId}`, {
+    method: 'PATCH',
+    token,
+    body: payload,
+  })
+}
+
+export async function listCodSurcharges(token: string): Promise<CodSurcharge[]> {
+  return request<CodSurcharge[]>('/admin/cod-surcharges', { token })
+}
+
+export async function putCodSurcharge(
+  token: string,
+  orderType: OrderType,
+  payload: { amount: string; is_active: boolean },
+): Promise<CodSurcharge> {
+  return request<CodSurcharge>(`/admin/cod-surcharges/${orderType}`, {
+    method: 'PUT',
+    token,
+    body: payload,
+  })
+}
+
+export async function listAgentOrders(
+  token: string,
+  page = 1,
+  pageSize = 20,
+): Promise<OrderPage> {
+  return request<OrderPage>(`/agent/orders?page=${page}&page_size=${pageSize}`, { token })
+}
+
+export async function updateAgentAvailability(
+  token: string,
+  availability: Exclude<AgentAvailability, 'BUSY'>,
+): Promise<AgentProfile> {
+  return request<AgentProfile>('/agent/availability', {
+    method: 'PATCH',
+    token,
+    body: { availability },
+  })
+}
+
+export async function updateAgentLocation(
+  token: string,
+  latitude: number,
+  longitude: number,
+): Promise<AgentProfile> {
+  return request<AgentProfile>('/agent/location', {
+    method: 'PATCH',
+    token,
+    body: { latitude, longitude },
+  })
+}
+
+export async function updateAgentOrderStatus(
+  token: string,
+  orderId: number,
+  targetStatus: OrderStatus,
+  reason?: string,
+): Promise<OrderDetail> {
+  return request<OrderDetail>(`/agent/orders/${orderId}/status`, {
+    method: 'PATCH',
+    token,
+    body: { target_status: targetStatus, reason },
   })
 }

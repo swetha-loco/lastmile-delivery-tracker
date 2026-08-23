@@ -1,4 +1,9 @@
-import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
+import type {
+  InputHTMLAttributes,
+  ReactNode,
+  SelectHTMLAttributes,
+  TextareaHTMLAttributes,
+} from 'react'
 
 export function FormField({
   label,
@@ -24,10 +29,10 @@ export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
   )
 }
 
-export function TextArea(props: InputHTMLAttributes<HTMLInputElement>) {
+export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
-    <input
-      className="h-12 rounded-lg border border-[#DDE5E1] bg-white px-3 text-sm font-medium text-[#142033] outline-none transition placeholder:text-[#98A2B3] focus:border-[#128C7E] focus:ring-4 focus:ring-[#DDF5EF]"
+    <textarea
+      className="min-h-24 resize-y rounded-lg border border-[#DDE5E1] bg-white px-3 py-3 text-sm font-medium text-[#142033] outline-none transition placeholder:text-[#98A2B3] focus:border-[#128C7E] focus:ring-4 focus:ring-[#DDF5EF]"
       {...props}
     />
   )
