@@ -68,12 +68,12 @@ export default function OrdersPage() {
         ) : null}
 
         <section className="overflow-hidden rounded-2xl border border-[#DDE5E1] bg-white">
-          <div className="hidden border-b border-[#DDE5E1] bg-[#F7F8F6] px-4 py-3 text-xs font-extrabold uppercase tracking-[0.08em] text-[#667085] md:grid md:grid-cols-[120px_1fr_150px_120px_120px]">
+          <div className="hidden border-b border-[#DDE5E1] bg-[#F7F8F6] px-4 py-3 text-xs font-extrabold uppercase tracking-[0.08em] text-[#667085] md:grid md:grid-cols-[120px_minmax(0,1fr)_max-content_minmax(92px,120px)_max-content] md:items-center">
             <span>Order</span>
             <span>Route</span>
             <span>Status</span>
             <span>Agent</span>
-            <span>Amount</span>
+            <span className="justify-self-end">Amount</span>
           </div>
 
           {isLoading ? (

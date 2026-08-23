@@ -16,17 +16,17 @@ export function RouteRail({
   return (
     <div className={`route-panel ${spacious ? 'min-h-44 content-center' : ''}`}>
       <div
-        className={`grid gap-5 sm:grid-cols-[1fr_auto_1fr] sm:items-center ${
+        className={`grid min-w-0 gap-5 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-center ${
           spacious ? 'min-h-32' : ''
         }`}
       >
         <RouteStop tone="pickup" label="Pickup" address={pickup} zone={pickupZone} />
-        <div className="hidden items-center gap-2 text-[#128C7E] sm:flex">
-          <span className={`${spacious ? 'w-24' : 'w-12'} h-px bg-[#9BD9CC]`} />
+        <div className="hidden min-w-0 items-center gap-2 text-[#128C7E] sm:flex">
+          <span className={`${spacious ? 'w-16' : 'w-6'} h-px bg-[#9BD9CC]`} />
           <span className="flex h-11 w-11 items-center justify-center rounded-full border border-[#BFE9DF] bg-white text-[#128C7E] shadow-sm">
             <Icon name="arrow" className="h-5 w-5" />
           </span>
-          <span className={`${spacious ? 'w-24' : 'w-12'} h-px bg-[#9BD9CC]`} />
+          <span className={`${spacious ? 'w-16' : 'w-6'} h-px bg-[#9BD9CC]`} />
         </div>
         <RouteStop tone="drop" label="Drop" address={drop} zone={dropZone} />
       </div>
@@ -46,7 +46,7 @@ function RouteStop({
   zone?: string
 }) {
   return (
-    <div className="flex gap-3">
+    <div className="flex min-w-0 gap-3">
       <span
         className={`mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
           tone === 'pickup'
@@ -56,14 +56,21 @@ function RouteStop({
       >
         <Icon name="pin" className="h-5 w-5" />
       </span>
-      <div>
+      <div className="min-w-0">
         <p className="text-xs font-extrabold uppercase tracking-[0.09em] text-[#667085]">
           {label}
         </p>
-        <p className="mt-1 line-clamp-2 text-base font-extrabold text-[#142033]">
+        <p
+          className="mt-1 line-clamp-2 text-base font-extrabold text-[#142033]"
+          title={address}
+        >
           {address}
         </p>
-        {zone ? <p className="mt-1 text-sm font-semibold text-[#667085]">{zone}</p> : null}
+        {zone ? (
+          <p className="mt-1 truncate text-sm font-semibold text-[#667085]" title={zone}>
+            {zone}
+          </p>
+        ) : null}
       </div>
     </div>
   )

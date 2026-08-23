@@ -9,7 +9,6 @@ import { Button } from '../../components/ui/Button'
 import { FormField, SelectInput, TextInput } from '../../components/ui/FormField'
 import { Icon } from '../../components/ui/Icon'
 import { useAuth } from '../../lib/auth'
-import { formatCurrency } from '../../lib/format'
 
 const initialForm: OrderInput = {
   pickup_address: '',
@@ -82,7 +81,7 @@ export default function NewOrderPage() {
           </h1>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-[1fr_420px]">
+        <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
           <form
             className="rounded-2xl border border-[#DDE5E1] bg-white p-5 sm:p-6"
             onSubmit={handleQuote}
@@ -119,7 +118,7 @@ export default function NewOrderPage() {
 
             <section className="mt-7">
               <h2 className="text-lg font-extrabold text-[#142033]">Package details</h2>
-              <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="mt-4 grid min-w-0 gap-4 sm:grid-cols-2 2xl:grid-cols-4">
                 <FormField label="Length (cm)">
                   <TextInput
                     min="0.001"
@@ -212,9 +211,9 @@ export default function NewOrderPage() {
             </div>
           </form>
 
-          <aside className="grid content-start gap-5">
+          <aside className="grid min-w-0 content-start gap-5">
             {quote ? (
-              <div className="grid gap-5 animate-in">
+              <div className="grid min-w-0 gap-5 animate-in">
                 <RouteRail
                   drop={quote.drop.formatted_address}
                   dropZone={quote.drop.zone_name}
@@ -230,15 +229,6 @@ export default function NewOrderPage() {
                   totalCharge={quote.total_charge}
                   volumetricWeight={quote.volumetric_weight_kg}
                 />
-                <div className="rounded-xl border border-[#DDE5E1] bg-white p-5">
-                  <p className="text-sm font-semibold text-[#667085]">
-                    Backend will recalculate the price from current configuration when you
-                    confirm. Frontend totals are never trusted.
-                  </p>
-                  <p className="mt-3 text-2xl font-extrabold text-[#071D34]">
-                    {formatCurrency(quote.total_charge)}
-                  </p>
-                </div>
               </div>
             ) : (
               <div className="rounded-2xl border border-dashed border-[#C9D6D1] bg-white p-6">
