@@ -264,6 +264,10 @@ core business behavior.
 - Current implementation target: Vercel for the React/Vite frontend, Render for
   the FastAPI web service, Render PostgreSQL, and a later Render
   notification/background worker.
+- Free demo deployment assumption: when a separate Render worker is not
+  available, `RUN_NOTIFICATION_WORKER=true` may run the same notification batch
+  processor inside the FastAPI web service process. This is a hosting
+  constraint workaround, not a change to the intended worker architecture.
 - Deployment policy: complete and validate the required application locally
   first, then perform production deployment near the end of implementation.
 - Easy to change later: deployment configuration can be adjusted without

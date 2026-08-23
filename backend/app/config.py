@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     twilio_account_sid: str = Field(default="", alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str = Field(default="", alias="TWILIO_AUTH_TOKEN")
     twilio_from_number: str = Field(default="", alias="TWILIO_FROM_NUMBER")
+    run_notification_worker: bool = Field(default=False, alias="RUN_NOTIFICATION_WORKER")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -226,6 +226,12 @@ Deployment policy: complete and validate the required application locally first,
 then perform production deployment near the end of implementation. Deployment
 configuration will be added later.
 
+For the free Render demo path, the notification worker may be temporarily
+co-located inside the FastAPI web service with `RUN_NOTIFICATION_WORKER=true`
+because Render free instances do not support a separate worker service. The
+standalone `python -m app.worker` process remains the intended production
+architecture when a separate worker is available.
+
 ## Major Transaction Boundaries
 
 ### Quote
