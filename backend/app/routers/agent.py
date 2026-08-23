@@ -22,6 +22,17 @@ from app.routers.orders import order_detail
 router = APIRouter(prefix="/agent", tags=["agent"])
 
 
+@router.get("/profile", response_model=AgentProfileResponse)
+def get_profile(
+    agent: Annotated[User, Depends(require_delivery_agent)],
+    db: Annotated[Session, Depends(get_db)],
+) -> object:
+    try:
+        return agent_service.require_profile(db, agent)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.patch("/location", response_model=AgentProfileResponse)
 def update_location(
     payload: AgentLocationRequest,

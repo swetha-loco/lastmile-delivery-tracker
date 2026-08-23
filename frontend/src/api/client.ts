@@ -506,6 +506,10 @@ export async function listAgentOrders(
   return request<OrderPage>(`/agent/orders?page=${page}&page_size=${pageSize}`, { token })
 }
 
+export async function getAgentProfile(token: string): Promise<AgentProfile> {
+  return request<AgentProfile>('/agent/profile', { token })
+}
+
 export async function updateAgentAvailability(
   token: string,
   availability: Exclude<AgentAvailability, 'BUSY'>,

@@ -202,6 +202,13 @@ Effect:
 
 ## Agent Endpoints
 
+### GET /agent/profile
+
+DELIVERY_AGENT only.
+
+Returns the current agent's profile state, including availability, latest stored
+location, current zone when known, and last assignment timestamp.
+
 ### GET /agent/orders
 
 DELIVERY_AGENT only.

@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 
-import type { AgentAvailability, AgentProfile, OrderDetail, OrderStatus, OrderSummary, TrackingResponse } from '../../api/client'
+import type {
+  AgentAvailability,
+  AgentProfile,
+  OrderDetail,
+  OrderStatus,
+  OrderSummary,
+  TrackingResponse,
+} from '../../api/client'
 import {
   ApiError,
+  getAgentProfile,
   getOrder,
   getTracking,
   listAgentOrders,
@@ -64,7 +72,11 @@ export default function AgentWorkspacePage() {
     if (!token) return
     setIsLoading(true)
     try {
-      const page = await listAgentOrders(token, 1, 20)
+      const [nextProfile, page] = await Promise.all([
+        getAgentProfile(token),
+        listAgentOrders(token, 1, 20),
+      ])
+      setProfile(nextProfile)
       setOrders(page.items)
       const active = page.items.find((order) => activeStatuses.includes(order.current_status))
       const focus = active ?? page.items[0]

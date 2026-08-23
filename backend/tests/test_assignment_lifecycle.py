@@ -211,6 +211,7 @@ def test_haversine_distance_is_close_to_expected() -> None:
 def test_agent_location_and_availability_updates() -> None:
     agent = create_user(UserRole.DELIVERY_AGENT)
 
+    profile = client.get("/agent/profile", headers=auth_header(agent))
     location = client.patch(
         "/agent/location",
         headers=auth_header(agent),
@@ -227,6 +228,8 @@ def test_agent_location_and_availability_updates() -> None:
         json={"availability": "BUSY"},
     )
 
+    assert profile.status_code == 200
+    assert profile.json()["availability"] == AgentAvailability.OFFLINE
     assert location.status_code == 200
     assert location.json()["current_zone_id"] is None
     assert available.status_code == 200
