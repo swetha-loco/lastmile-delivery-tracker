@@ -4,6 +4,9 @@ export function PriceBreakdown({
   actualWeight,
   volumetricWeight,
   billableWeight,
+  originZone,
+  destinationZone,
+  orderType,
   ratePerKg,
   deliveryCharge,
   codSurcharge,
@@ -12,11 +15,29 @@ export function PriceBreakdown({
   actualWeight: string
   volumetricWeight: string
   billableWeight: string
+  originZone?: string
+  destinationZone?: string
+  orderType?: string
   ratePerKg: string
   deliveryCharge: string
   codSurcharge: string
   totalCharge: string
 }) {
+  const actual = Number(actualWeight)
+  const volumetric = Number(volumetricWeight)
+  const billableReason =
+    actual === volumetric
+      ? 'Actual and volumetric weight are equal, so that weight is used for billing.'
+      : actual > volumetric
+        ? 'Actual weight is higher than volumetric weight, so actual weight is used for billing.'
+        : 'Volumetric weight is higher than actual weight, so volumetric weight is used for billing.'
+  const routeLabel =
+    originZone && destinationZone
+      ? `${originZone} -> ${destinationZone}${orderType ? ` / ${orderType}` : ''}`
+      : orderType
+        ? `${orderType} rate`
+        : 'Configured rate'
+
   return (
     <div className="rounded-xl border border-[#DDE5E1] bg-white p-5">
       <p className="text-xs font-extrabold uppercase tracking-[0.1em] text-[#667085]">
@@ -30,12 +51,21 @@ export function PriceBreakdown({
             <span className="text-sm font-extrabold text-[#0F766E]">Billable weight</span>
             <span className="font-extrabold text-[#0F766E]">{billableWeight} kg</span>
           </div>
+          <p className="mt-2 text-xs font-semibold leading-5 text-[#0F766E]">
+            {billableReason}
+          </p>
         </div>
       </div>
 
       <div className="mt-5 border-t border-[#DDE5E1] pt-4">
+        <p className="mb-2 text-xs font-extrabold uppercase tracking-[0.08em] text-[#667085]">
+          {routeLabel}
+        </p>
         <WeightLine label="Rate per kg" value={formatCurrency(ratePerKg)} />
-        <WeightLine label="Delivery charge" value={formatCurrency(deliveryCharge)} />
+        <WeightLine
+          label={`Delivery charge (${billableWeight} kg x ${formatCurrency(ratePerKg)})`}
+          value={formatCurrency(deliveryCharge)}
+        />
         <WeightLine label="COD surcharge" value={formatCurrency(codSurcharge)} />
       </div>
 

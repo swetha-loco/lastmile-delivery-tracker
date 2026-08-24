@@ -43,6 +43,12 @@ export type OrderInput = {
   payment_type: PaymentType
 }
 
+export type OrderCreateInput = OrderInput & {
+  package_description?: string | null
+  is_fragile?: boolean
+  delivery_instructions?: string | null
+}
+
 export type ResolvedAddress = {
   formatted_address: string
   postal_code: string
@@ -77,6 +83,9 @@ export type OrderSummary = {
   current_status: OrderStatus
   total_charge: string
   current_agent_id: number | null
+  package_description: string | null
+  is_fragile: boolean
+  delivery_instructions: string | null
   created_at: string
 }
 
@@ -302,7 +311,7 @@ export async function quoteOrder(
 
 export async function createOrder(
   token: string,
-  payload: OrderInput,
+  payload: OrderCreateInput,
 ): Promise<OrderDetail> {
   return request<OrderDetail>('/orders', { method: 'POST', token, body: payload })
 }

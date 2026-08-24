@@ -17,13 +17,14 @@ import DashboardPage from './pages/customer/DashboardPage'
 import NewOrderPage from './pages/customer/NewOrderPage'
 import OrderDetailPage from './pages/customer/OrderDetailPage'
 import OrdersPage from './pages/customer/OrdersPage'
+import HomePage from './pages/HomePage'
 import NotFoundPage from './pages/NotFoundPage'
 
 function App() {
   return (
     <AuthProvider>
       <Routes>
-        <Route path="/" element={<RoleRedirect />} />
+        <Route path="/" element={<HomePage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route element={<RequireRole role="CUSTOMER" />}>
@@ -58,22 +59,6 @@ function App() {
       </Routes>
     </AuthProvider>
   )
-}
-
-function RoleRedirect() {
-  const { isLoading, user } = useAuth()
-
-  if (isLoading) {
-    return <LoadingScreen />
-  }
-
-  if (!user) {
-    return <Navigate replace to="/login" />
-  }
-
-  if (user.role === 'ADMIN') return <Navigate replace to="/admin/orders" />
-  if (user.role === 'DELIVERY_AGENT') return <Navigate replace to="/agent" />
-  return <Navigate replace to="/dashboard" />
 }
 
 function RequireRole({ role }: { role: 'CUSTOMER' | 'DELIVERY_AGENT' | 'ADMIN' }) {

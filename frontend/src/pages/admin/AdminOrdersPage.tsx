@@ -342,11 +342,42 @@ export default function AdminOrdersPage() {
                   <Fact label="Payment" value={selectedOrder.payment_type} />
                 </div>
 
+                {selectedOrder.package_description ||
+                selectedOrder.is_fragile ||
+                selectedOrder.delivery_instructions ? (
+                  <section className="rounded-xl border border-[#DDE5E1] bg-[#F7F8F6] p-4">
+                    <h3 className="font-extrabold text-[#142033]">Package & handling</h3>
+                    <div className="mt-3 grid gap-2 text-sm font-semibold text-[#667085]">
+                      {selectedOrder.package_description ? (
+                        <Fact label="Package" value={selectedOrder.package_description} />
+                      ) : null}
+                      {selectedOrder.is_fragile ? (
+                        <div className="rounded-lg border border-[#F8D79B] bg-[#FFF8EB] p-3 font-bold text-[#8A4B00]">
+                          Fragile package - handle with care
+                        </div>
+                      ) : null}
+                      {selectedOrder.delivery_instructions ? (
+                        <div>
+                          <p className="text-xs font-extrabold uppercase tracking-[0.08em]">
+                            Delivery instructions
+                          </p>
+                          <p className="mt-1 leading-6 text-[#142033]">
+                            {selectedOrder.delivery_instructions}
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
+                  </section>
+                ) : null}
+
                 <PriceBreakdown
                   actualWeight={selectedOrder.actual_weight_kg}
                   billableWeight={selectedOrder.billable_weight_kg}
                   codSurcharge={selectedOrder.cod_surcharge}
                   deliveryCharge={selectedOrder.delivery_charge}
+                  destinationZone={selectedOrder.drop_zone_name}
+                  orderType={selectedOrder.order_type}
+                  originZone={selectedOrder.pickup_zone_name}
                   ratePerKg={selectedOrder.rate_per_kg}
                   totalCharge={selectedOrder.total_charge}
                   volumetricWeight={selectedOrder.volumetric_weight_kg}

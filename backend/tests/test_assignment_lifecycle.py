@@ -6,6 +6,7 @@ from threading import Barrier, Thread
 from uuid import uuid4
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, or_, select
 
@@ -34,7 +35,13 @@ from app.models import (
 from app.security import hash_password
 from app.services import assignment
 from app.services.notifications import ProviderResult, ProviderSendError
-from app.services.notifications import process_notification_batch
+from app.services.notifications import ResendEmailProvider, TwilioSmsProvider
+from app.services.notifications import (
+    process_notification_batch,
+    render_email,
+    render_sms,
+    twilio_trial_template,
+)
 
 client = TestClient(app)
 
@@ -808,6 +815,102 @@ def test_notification_delivery_rows_created_for_status_events() -> None:
             }
 
 
+def test_created_email_template_is_customer_facing() -> None:
+    order_id = create_worker_order()
+    with SessionLocal() as db:
+        event = db.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.order_id == order_id,
+                OutboxEvent.event_type == "ORDER_CREATED",
+            )
+        )
+        assert event is not None
+        message = render_email(event)
+
+    assert message.subject == f"Your delivery has been created - LM-{order_id:05d}"
+    assert "Last-Mile Delivery Tracker" in message.text
+    assert "Assignment pickup" in message.text
+    assert "Assignment drop" in message.text
+    assert "Rs. 40.00" in message.text
+    assert "ORDER_CREATED" not in message.text
+    assert "<html" in message.html
+    assert "background:#071D34" in message.html
+    assert "ORDER_CREATED" not in message.html
+
+
+def test_failed_email_template_includes_failure_reason() -> None:
+    admin, _, agent, _, order_id = assignment_setup()
+    fail_order(order_id, admin, agent)
+
+    with SessionLocal() as db:
+        event = db.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.order_id == order_id,
+                OutboxEvent.event_type == "ORDER_FAILED",
+            )
+        )
+        assert event is not None
+        message = render_email(event)
+
+    assert message.subject == f"Delivery attempt could not be completed - LM-{order_id:05d}"
+    assert "We couldn't complete this delivery attempt" in message.text
+    assert "Customer unavailable" in message.text
+    assert "ORDER_FAILED" not in message.text
+
+
+def test_rescheduled_email_template_includes_scheduled_date() -> None:
+    admin, customer, agent, _, order_id = assignment_setup()
+    fail_order(order_id, admin, agent)
+    future_date = (datetime.now(UTC).date() + timedelta(days=2)).isoformat()
+    response = client.post(
+        f"/orders/{order_id}/reschedule",
+        headers=auth_header(customer),
+        json={"scheduled_date": future_date},
+    )
+    assert response.status_code == 200
+
+    with SessionLocal() as db:
+        event = db.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.order_id == order_id,
+                OutboxEvent.event_type == "ORDER_RESCHEDULED",
+            )
+        )
+        assert event is not None
+        message = render_email(event)
+
+    assert message.subject == f"Your delivery has been rescheduled - LM-{order_id:05d}"
+    assert "Your delivery has been rescheduled" in message.text
+    assert future_date in message.text
+    assert "ORDER_RESCHEDULED" not in message.text
+
+
+@pytest.mark.parametrize(
+    ("event_type", "expected"),
+    [
+        ("ORDER_CREATED", "Last-Mile: Order LM-00001 created successfully. We'll keep you updated."),
+        ("ORDER_ASSIGNED", "Last-Mile: Agent assigned to order LM-00001."),
+        ("ORDER_PICKED_UP", "Last-Mile: Order LM-00001 has been picked up."),
+        ("ORDER_IN_TRANSIT", "Last-Mile: Order LM-00001 is in transit."),
+        ("ORDER_OUT_FOR_DELIVERY", "Last-Mile: Order LM-00001 is out for delivery."),
+        ("ORDER_DELIVERED", "Last-Mile: Order LM-00001 has been delivered."),
+        (
+            "ORDER_FAILED",
+            "Last-Mile: Delivery attempt for LM-00001 failed. Open the app to reschedule.",
+        ),
+        ("ORDER_RESCHEDULED", "Last-Mile: Order LM-00001 has been rescheduled."),
+    ],
+)
+def test_sms_copy_generation(event_type: str, expected: str) -> None:
+    order_id = create_worker_order()
+    with SessionLocal() as db:
+        event = db.scalar(select(OutboxEvent).where(OutboxEvent.order_id == order_id))
+        assert event is not None
+        event.event_type = event_type
+        event.payload = {"order_id": 1, "status": event_type.replace("ORDER_", "")}
+        assert render_sms(event) == expected
+
+
 def test_worker_success_mixed_retry_terminal_failure_and_idempotency() -> None:
     order_id = create_worker_order()
     with SessionLocal() as db:
@@ -900,6 +1003,189 @@ def test_worker_success_mixed_retry_terminal_failure_and_idempotency() -> None:
         assert terminal.attempt_count == 5
 
 
+def test_worker_logs_safe_delivery_results(capsys: pytest.CaptureFixture[str]) -> None:
+    order_id = create_worker_order()
+    with SessionLocal() as db:
+        event = db.scalar(select(OutboxEvent).where(OutboxEvent.order_id == order_id))
+        assert event is not None
+        delivery = NotificationDelivery(
+            event=event,
+            channel=NotificationChannel.EMAIL,
+            recipient="customer@example.com",
+            status=NotificationStatus.PENDING,
+        )
+        db.add(delivery)
+        db.commit()
+
+    with SessionLocal() as db:
+        processed = process_notification_batch(
+            db, email_provider=FakeEmailProvider(["email-log-id"])
+        )
+
+    assert processed == 1
+    output = capsys.readouterr().out
+    assert "Notification delivery" in output
+    assert "[EMAIL] -> SENT" in output
+    assert "email-log-id" in output
+    assert "customer@example.com" not in output
+
+
+def test_resend_provider_sends_html_and_stores_message_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    get_settings.cache_clear()
+    monkeypatch.setenv("RESEND_API_KEY", "test-resend-key")
+    monkeypatch.setenv("EMAIL_FROM", "noreply@example.com")
+    calls: list[dict[str, object]] = []
+
+    def fake_post(*args, **kwargs):
+        calls.append(kwargs)
+        return httpx.Response(202, json={"id": "resend-message-id"})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    result = ResendEmailProvider().send(
+        "customer@example.com", "Subject", "Plain body", "<strong>HTML body</strong>"
+    )
+
+    assert result.message_id == "resend-message-id"
+    assert calls[0]["json"]["text"] == "Plain body"
+    assert calls[0]["json"]["html"] == "<strong>HTML body</strong>"
+    get_settings.cache_clear()
+
+
+def test_provider_http_failures_capture_safe_error_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    get_settings.cache_clear()
+    monkeypatch.setenv("RESEND_API_KEY", "test-resend-key")
+    monkeypatch.setenv("EMAIL_FROM", "noreply@example.com")
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC123")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "test-twilio-token")
+    monkeypatch.setenv("TWILIO_FROM_NUMBER", "+15551110000")
+
+    def fake_post(url, *args, **kwargs):
+        if "resend.com" in url:
+            return httpx.Response(429, json={"message": "rate limit"})
+        return httpx.Response(400, json={"code": 21614, "message": "unverified number"})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    with pytest.raises(ProviderSendError) as resend_error:
+        ResendEmailProvider().send("customer@example.com", "Subject", "Text", "<p>HTML</p>")
+    assert "Resend send failed (429): rate limit" in str(resend_error.value)
+
+    with pytest.raises(ProviderSendError) as twilio_error:
+        TwilioSmsProvider().send("+15550000000", "Message")
+    assert "Twilio send failed (400): 21614: unverified number" in str(twilio_error.value)
+    assert "test-resend-key" not in str(resend_error.value)
+    assert "test-twilio-token" not in str(twilio_error.value)
+    get_settings.cache_clear()
+
+
+def test_twilio_trial_templates_map_order_events() -> None:
+    assert twilio_trial_template("ORDER_CREATED") == "sms_order_confirmation"
+    for event_type in [
+        "ORDER_ASSIGNED",
+        "ORDER_PICKED_UP",
+        "ORDER_IN_TRANSIT",
+        "ORDER_OUT_FOR_DELIVERY",
+        "ORDER_DELIVERED",
+        "ORDER_FAILED",
+        "ORDER_RESCHEDULED",
+    ]:
+        assert twilio_trial_template(event_type) == "sms_delivery_updates"
+
+
+def test_twilio_trial_mode_uses_template_and_omits_sender(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    get_settings.cache_clear()
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC123")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "test-twilio-token")
+    monkeypatch.setenv("TWILIO_FROM_NUMBER", "+15551110000")
+    monkeypatch.setenv("TWILIO_TRIAL_MODE", "true")
+    calls: list[dict[str, object]] = []
+
+    def fake_post(*args, **kwargs):
+        calls.append(kwargs)
+        return httpx.Response(201, json={"sid": "SMtrial"})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    result = TwilioSmsProvider().send(
+        "+15550000000",
+        "Last-Mile: custom text should not be sent in trial mode.",
+        event_type="ORDER_CREATED",
+    )
+
+    assert result.message_id == "SMtrial"
+    assert calls[0]["data"] == {
+        "To": "+15550000000",
+        "Body": "sms_order_confirmation",
+    }
+    get_settings.cache_clear()
+
+
+def test_twilio_trial_lifecycle_statuses_use_delivery_update_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    get_settings.cache_clear()
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC123")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "test-twilio-token")
+    monkeypatch.setenv("TWILIO_FROM_NUMBER", "+15551110000")
+    monkeypatch.setenv("TWILIO_TRIAL_MODE", "true")
+    calls: list[dict[str, object]] = []
+
+    def fake_post(*args, **kwargs):
+        calls.append(kwargs)
+        return httpx.Response(201, json={"sid": "SMupdates"})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    result = TwilioSmsProvider().send(
+        "+15550000000",
+        "Last-Mile: Agent assigned to order LM-00001.",
+        event_type="ORDER_ASSIGNED",
+    )
+
+    assert result.message_id == "SMupdates"
+    assert calls[0]["data"] == {
+        "To": "+15550000000",
+        "Body": "sms_delivery_updates",
+    }
+    get_settings.cache_clear()
+
+
+def test_twilio_normal_mode_keeps_custom_sms_text_and_sender(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    get_settings.cache_clear()
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC123")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "test-twilio-token")
+    monkeypatch.setenv("TWILIO_FROM_NUMBER", "+15551110000")
+    monkeypatch.setenv("TWILIO_TRIAL_MODE", "false")
+    calls: list[dict[str, object]] = []
+
+    def fake_post(*args, **kwargs):
+        calls.append(kwargs)
+        return httpx.Response(201, json={"sid": "SMnormal"})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    custom_message = "Last-Mile: Order LM-00001 is out for delivery."
+    result = TwilioSmsProvider().send(
+        "+15550000000", custom_message, event_type="ORDER_OUT_FOR_DELIVERY"
+    )
+
+    assert result.message_id == "SMnormal"
+    assert calls[0]["data"] == {
+        "From": "+15551110000",
+        "To": "+15550000000",
+        "Body": custom_message,
+    }
+    get_settings.cache_clear()
+
+
 def test_worker_skips_not_yet_due_retry() -> None:
     order_id = create_worker_order()
     with SessionLocal() as db:
@@ -928,8 +1214,8 @@ def test_worker_missing_provider_config_retries_without_network(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     get_settings.cache_clear()
-    monkeypatch.delenv("RESEND_API_KEY", raising=False)
-    monkeypatch.delenv("EMAIL_FROM", raising=False)
+    monkeypatch.setenv("RESEND_API_KEY", "")
+    monkeypatch.setenv("EMAIL_FROM", "")
     order_id = create_worker_order()
     with SessionLocal() as db:
         event = db.scalar(select(OutboxEvent).where(OutboxEvent.order_id == order_id))
@@ -1025,8 +1311,10 @@ class FakeEmailProvider:
         self.outcomes = outcomes
         self.sent: list[tuple[str, str, str]] = []
 
-    def send(self, recipient: str, subject: str, body: str) -> ProviderResult:
-        self.sent.append((recipient, subject, body))
+    def send(
+        self, recipient: str, subject: str, text_body: str, html_body: str
+    ) -> ProviderResult:
+        self.sent.append((recipient, subject, text_body))
         outcome = self.outcomes.pop(0) if self.outcomes else "email-id"
         if isinstance(outcome, ProviderSendError):
             raise outcome

@@ -277,7 +277,7 @@ def test_geoapify_parsing_and_provider_errors(monkeypatch: pytest.MonkeyPatch) -
 
 def test_geocoding_missing_key(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
-    monkeypatch.delenv("GEOAPIFY_API_KEY", raising=False)
+    monkeypatch.setenv("GEOAPIFY_API_KEY", "")
     with pytest.raises(geocoding.GeocodingConfigurationError):
         geocoding.geocode_address("Chennai")
     get_settings.cache_clear()
@@ -292,7 +292,13 @@ def test_quote_customer_admin_rbac_response_and_non_persistence(monkeypatch: pyt
 
     before = count_order_tables()
     customer_quote = client.post(
-        "/orders/quote", headers=auth_header(customer), json=order_payload()
+        "/orders/quote",
+        headers=auth_header(customer),
+        json=order_payload(
+            package_description="Documents",
+            is_fragile=True,
+            delivery_instructions="Call before arrival",
+        ),
     )
     admin_quote = client.post(
         "/orders/quote", headers=auth_header(admin), json=order_payload()
@@ -307,6 +313,7 @@ def test_quote_customer_admin_rbac_response_and_non_persistence(monkeypatch: pyt
     assert agent_quote.status_code == 403
     assert customer_quote.json()["pickup"]["zone_name"].startswith("OrderPickupZone")
     assert Decimal(customer_quote.json()["total_charge"]) == Decimal("40.00")
+    assert "package_description" not in customer_quote.json()
     assert before == after
 
 
@@ -461,7 +468,12 @@ def test_customer_order_creation_snapshot_history_outbox_list_detail_tracking(mo
     response = client.post(
         "/orders",
         headers=auth_header(customer),
-        json=order_payload(total_charge="0.01"),
+        json=order_payload(
+            total_charge="0.01",
+            package_description="Laptop accessories",
+            is_fragile=True,
+            delivery_instructions="Call before arrival",
+        ),
     )
 
     assert response.status_code == 201
@@ -470,10 +482,16 @@ def test_customer_order_creation_snapshot_history_outbox_list_detail_tracking(mo
     assert body["current_status"] == OrderStatus.CREATED
     assert body["current_agent_id"] is None
     assert Decimal(body["total_charge"]) == Decimal("40.00")
+    assert body["package_description"] == "Laptop accessories"
+    assert body["is_fragile"] is True
+    assert body["delivery_instructions"] == "Call before arrival"
 
     with SessionLocal() as db:
         order = db.get(Order, order_id)
         assert order is not None
+        assert order.package_description == "Laptop accessories"
+        assert order.is_fragile is True
+        assert order.delivery_instructions == "Call before arrival"
         assert db.scalar(select(OrderStatusHistory).where(OrderStatusHistory.order_id == order_id)).to_status == OrderStatus.CREATED
         event = db.scalar(select(OutboxEvent).where(OutboxEvent.order_id == order_id))
         assert event is not None
@@ -496,10 +514,38 @@ def test_customer_order_creation_snapshot_history_outbox_list_detail_tracking(mo
 
     assert any(item["id"] == order_id for item in listing.json()["items"])
     assert detail.status_code == 200
+    assert detail.json()["package_description"] == "Laptop accessories"
+    assert detail.json()["is_fragile"] is True
+    assert detail.json()["delivery_instructions"] == "Call before arrival"
     assert admin_detail.status_code == 200
     assert blocked.status_code == 404
     assert tracking.status_code == 200
     assert tracking.json()["history"][0]["to_status"] == OrderStatus.CREATED
+
+
+def test_order_defaults_package_handling_fields_and_fragile_does_not_affect_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_config()
+    customer = create_user(UserRole.CUSTOMER)
+    install_fake_geocoder(monkeypatch)
+
+    default_order = client.post(
+        "/orders", headers=auth_header(customer), json=order_payload()
+    )
+    fragile_order = client.post(
+        "/orders",
+        headers=auth_header(customer),
+        json=order_payload(is_fragile=True, package_description="Glassware"),
+    )
+
+    assert default_order.status_code == 201
+    assert fragile_order.status_code == 201
+    assert default_order.json()["package_description"] is None
+    assert default_order.json()["is_fragile"] is False
+    assert default_order.json()["delivery_instructions"] is None
+    assert Decimal(default_order.json()["total_charge"]) == Decimal("40.00")
+    assert Decimal(fragile_order.json()["total_charge"]) == Decimal("40.00")
 
 
 def test_pricing_snapshot_invariance_and_new_quote_uses_new_rate(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -539,7 +585,14 @@ def test_admin_order_creation_and_filters(monkeypatch: pytest.MonkeyPatch) -> No
     created = client.post(
         "/admin/orders",
         headers=auth_header(admin),
-        json={"customer_id": customer.id, **order_payload()},
+        json={
+            "customer_id": customer.id,
+            **order_payload(
+                package_description="Books",
+                is_fragile=True,
+                delivery_instructions="Leave with security",
+            ),
+        },
     )
     bad_target = client.post(
         "/admin/orders",
@@ -551,6 +604,9 @@ def test_admin_order_creation_and_filters(monkeypatch: pytest.MonkeyPatch) -> No
     body = created.json()
     assert body["customer_id"] == customer.id
     assert body["created_by_id"] == admin.id
+    assert body["package_description"] == "Books"
+    assert body["is_fragile"] is True
+    assert body["delivery_instructions"] == "Leave with security"
     assert bad_target.status_code == 422
 
     with SessionLocal() as db:

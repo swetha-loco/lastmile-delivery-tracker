@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+from html import escape
 
 import httpx
 from sqlalchemy import and_, or_, select
@@ -34,6 +35,13 @@ class ProviderResult:
 
 class ProviderSendError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class EmailMessage:
+    subject: str
+    text: str
+    html: str
 
 
 def create_order_event(
@@ -105,12 +113,14 @@ def process_notification_batch(
             result = send_delivery(provider, delivery)
         except ProviderSendError as exc:
             mark_failed_attempt(delivery, str(exc))
+            log_delivery_result(delivery)
         else:
             delivery.status = NotificationStatus.SENT
             delivery.provider_message_id = result.message_id
             delivery.sent_at = now_utc()
             delivery.next_attempt_at = None
             delivery.last_error = None
+            log_delivery_result(delivery)
         processed += 1
     db.commit()
     return processed
@@ -118,9 +128,11 @@ def process_notification_batch(
 
 def send_delivery(provider: object, delivery: NotificationDelivery) -> ProviderResult:
     if delivery.channel == NotificationChannel.EMAIL:
-        subject, body = render_email(delivery.event)
-        return provider.send(delivery.recipient, subject, body)
+        message = render_email(delivery.event)
+        return provider.send(delivery.recipient, message.subject, message.text, message.html)
     message = render_sms(delivery.event)
+    if isinstance(provider, TwilioSmsProvider):
+        return provider.send(delivery.recipient, message, event_type=delivery.event.event_type)
     return provider.send(delivery.recipient, message)
 
 
@@ -136,40 +148,212 @@ def mark_failed_attempt(delivery: NotificationDelivery, error: str) -> None:
     delivery.next_attempt_at = now_utc() + RETRY_DELAYS[delivery.attempt_count - 1]
 
 
-def render_email(event: OutboxEvent) -> tuple[str, str]:
-    order_id = event.payload.get("order_id", event.order_id)
-    status = human_status(str(event.payload.get("status", event.event_type)))
-    subject = f"Order #{order_id} status: {status}"
-    lines = [
-        f"Your order #{order_id} status is now {status}.",
-        f"Event: {event.event_type}",
+def log_delivery_result(delivery: NotificationDelivery) -> None:
+    message = f"Notification delivery {delivery.id} [{delivery.channel.value}] -> {delivery.status.value}"
+    if delivery.status == NotificationStatus.SENT and delivery.provider_message_id:
+        message += f" ({delivery.provider_message_id})"
+    elif delivery.status in {NotificationStatus.RETRY, NotificationStatus.FAILED} and delivery.last_error:
+        message += f": {delivery.last_error}"
+    print(message)
+
+
+def render_email(event: OutboxEvent) -> EmailMessage:
+    payload = event.payload
+    order = event.order
+    order_code = display_order_id(int(payload.get("order_id", event.order_id)))
+    copy = event_copy(event.event_type)
+    status = human_status(str(payload.get("status", event.event_type)))
+    subject = f"{copy['subject']} - {order_code}"
+
+    rows: list[tuple[str, object | None]] = [
+        ("Order", order_code),
+        ("Status", status),
+        ("Pickup", payload.get("pickup_address") or getattr(order, "pickup_address", None)),
+        ("Drop", payload.get("drop_address") or getattr(order, "drop_address", None)),
+        ("Total", format_money(payload.get("total_charge") or getattr(order, "total_charge", None))),
+        ("Assigned agent", assigned_agent_name(order)),
+        ("Failure reason", payload.get("reason") if event.event_type == "ORDER_FAILED" else None),
+        (
+            "Scheduled date",
+            payload.get("scheduled_date") if event.event_type == "ORDER_RESCHEDULED" else None,
+        ),
     ]
-    if event.payload.get("total_charge") is not None:
-        lines.append(f"Total charge: {event.payload['total_charge']}")
-    if event.payload.get("reason"):
-        lines.append(f"Reason: {event.payload['reason']}")
-    if event.payload.get("scheduled_date"):
-        lines.append(f"New scheduled date: {event.payload['scheduled_date']}")
-    return subject, "\n".join(lines)
+    visible_rows = [(label, value) for label, value in rows if value not in (None, "")]
+
+    text_lines = [
+        "Last-Mile Delivery Tracker",
+        "",
+        str(copy["heading"]),
+        str(copy["body"]),
+        "",
+    ]
+    for label, value in visible_rows:
+        text_lines.extend([str(label), str(value), ""])
+    text_lines.append(str(copy["footer"]))
+
+    html_rows = "\n".join(
+        f"""
+        <tr>
+          <td style="padding:12px 0;color:#667085;font-size:13px;font-weight:700;width:34%;vertical-align:top;">{escape(label)}</td>
+          <td style="padding:12px 0;color:#142033;font-size:14px;font-weight:700;line-height:1.45;vertical-align:top;">{escape(str(value))}</td>
+        </tr>
+        """
+        for label, value in visible_rows
+    )
+    html = f"""<!doctype html>
+<html>
+  <body style="margin:0;background:#F7F8F6;font-family:Manrope,Arial,sans-serif;color:#142033;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#F7F8F6;padding:24px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#FFFFFF;border:1px solid #DDE5E1;border-radius:14px;overflow:hidden;">
+            <tr>
+              <td style="background:#071D34;padding:22px 24px;color:#FFFFFF;">
+                <div style="font-size:16px;font-weight:800;letter-spacing:.01em;">Last-Mile Delivery Tracker</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:28px 24px 8px;">
+                <div style="display:inline-block;height:4px;width:42px;background:#F25F3A;border-radius:999px;margin-bottom:18px;"></div>
+                <h1 style="margin:0;color:#071D34;font-size:24px;line-height:1.25;font-weight:800;">{escape(str(copy["heading"]))}</h1>
+                <p style="margin:10px 0 0;color:#667085;font-size:15px;line-height:1.6;">{escape(str(copy["body"]))}</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:8px 24px 24px;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-top:1px solid #DDE5E1;border-bottom:1px solid #DDE5E1;">
+                  {html_rows}
+                </table>
+                <p style="margin:20px 0 0;color:#667085;font-size:14px;line-height:1.6;">{escape(str(copy["footer"]))}</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>"""
+    return EmailMessage(subject=subject, text="\n".join(text_lines), html=html)
 
 
 def render_sms(event: OutboxEvent) -> str:
-    order_id = event.payload.get("order_id", event.order_id)
-    status = human_status(str(event.payload.get("status", event.event_type)))
-    message = f"Order #{order_id}: {status}."
-    if event.payload.get("scheduled_date"):
-        message += f" Scheduled {event.payload['scheduled_date']}."
-    if event.payload.get("reason") and event.event_type == "ORDER_FAILED":
-        message += f" Reason: {event.payload['reason']}."
-    return message
+    order_code = display_order_id(int(event.payload.get("order_id", event.order_id)))
+    messages = {
+        "ORDER_CREATED": f"Last-Mile: Order {order_code} created successfully. We'll keep you updated.",
+        "ORDER_ASSIGNED": f"Last-Mile: Agent assigned to order {order_code}.",
+        "ORDER_PICKED_UP": f"Last-Mile: Order {order_code} has been picked up.",
+        "ORDER_IN_TRANSIT": f"Last-Mile: Order {order_code} is in transit.",
+        "ORDER_OUT_FOR_DELIVERY": f"Last-Mile: Order {order_code} is out for delivery.",
+        "ORDER_DELIVERED": f"Last-Mile: Order {order_code} has been delivered.",
+        "ORDER_FAILED": f"Last-Mile: Delivery attempt for {order_code} failed. Open the app to reschedule.",
+        "ORDER_RESCHEDULED": f"Last-Mile: Order {order_code} has been rescheduled.",
+    }
+    return messages.get(
+        event.event_type,
+        f"Last-Mile: Order {order_code} status is {human_status(str(event.payload.get('status', event.event_type)))}.",
+    )
+
+
+def twilio_trial_template(event_type: str) -> str:
+    if event_type == "ORDER_CREATED":
+        return "sms_order_confirmation"
+    return "sms_delivery_updates"
 
 
 def human_status(value: str) -> str:
     return value.replace("ORDER_", "").replace("_", " ").title()
 
 
+def display_order_id(order_id: int) -> str:
+    return f"LM-{order_id:05d}"
+
+
+def format_money(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return f"Rs. {value}"
+
+
+def assigned_agent_name(order: Order | None) -> str | None:
+    if order is None or order.current_agent is None:
+        return None
+    return order.current_agent.user.name
+
+
+def event_copy(event_type: str) -> dict[str, str]:
+    copy = {
+        "ORDER_CREATED": {
+            "subject": "Your delivery has been created",
+            "heading": "Your delivery has been created",
+            "body": "We have received your delivery request.",
+        },
+        "ORDER_ASSIGNED": {
+            "subject": "An agent has been assigned",
+            "heading": "An agent has been assigned to your delivery",
+            "body": "Your delivery is now assigned and ready for pickup.",
+        },
+        "ORDER_PICKED_UP": {
+            "subject": "Your parcel has been picked up",
+            "heading": "Your parcel has been picked up",
+            "body": "Your parcel is now with the delivery agent.",
+        },
+        "ORDER_IN_TRANSIT": {
+            "subject": "Your delivery is on the way",
+            "heading": "Your delivery is on the way",
+            "body": "Your parcel is moving through the delivery route.",
+        },
+        "ORDER_OUT_FOR_DELIVERY": {
+            "subject": "Your delivery is out for delivery",
+            "heading": "Your delivery is out for delivery",
+            "body": "Your parcel is on its final delivery leg.",
+        },
+        "ORDER_DELIVERED": {
+            "subject": "Your delivery has been delivered",
+            "heading": "Your delivery has been delivered",
+            "body": "This delivery has been completed.",
+            "footer": "Thank you for using Last-Mile Delivery Tracker.",
+        },
+        "ORDER_FAILED": {
+            "subject": "Delivery attempt could not be completed",
+            "heading": "We couldn't complete this delivery attempt",
+            "body": "Please review the attempt details and reschedule from the app when ready.",
+        },
+        "ORDER_RESCHEDULED": {
+            "subject": "Your delivery has been rescheduled",
+            "heading": "Your delivery has been rescheduled",
+            "body": "We will prepare a new delivery attempt for the selected date.",
+        },
+    }
+    default = {
+        "subject": "Your delivery status has changed",
+        "heading": "Your delivery status has changed",
+        "body": "We have an update on your delivery.",
+    }
+    selected = {**default, **copy.get(event_type, {})}
+    selected.setdefault("footer", "We'll keep you updated as your delivery progresses.")
+    return selected
+
+
+def provider_error_detail(response: httpx.Response) -> str:
+    try:
+        data = response.json()
+    except ValueError:
+        body = response.text.strip()
+        return body[:300] if body else response.reason_phrase
+    if isinstance(data, dict):
+        code = data.get("code") or data.get("error_code")
+        message = data.get("message") or data.get("error") or data.get("detail")
+        if code and message:
+            return f"{code}: {message}"
+        if message:
+            return str(message)
+    return response.reason_phrase
+
+
 class ResendEmailProvider:
-    def send(self, recipient: str, subject: str, body: str) -> ProviderResult:
+    def send(
+        self, recipient: str, subject: str, text_body: str, html_body: str
+    ) -> ProviderResult:
         settings = get_settings()
         if not settings.resend_api_key or not settings.email_from:
             raise ProviderSendError("Resend configuration is missing")
@@ -181,42 +365,55 @@ class ResendEmailProvider:
                     "from": settings.email_from,
                     "to": [recipient],
                     "subject": subject,
-                    "text": body,
+                    "text": text_body,
+                    "html": html_body,
                 },
                 timeout=10,
             )
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise ProviderSendError("Resend send failed") from exc
+        except httpx.RequestError as exc:
+            raise ProviderSendError(f"Resend request failed: {exc.__class__.__name__}") from exc
+        if response.status_code >= 400:
+            raise ProviderSendError(
+                f"Resend send failed ({response.status_code}): {provider_error_detail(response)}"
+            )
         data = response.json()
         message_id = data.get("id") if isinstance(data, dict) else None
         return ProviderResult(message_id=message_id)
 
 
 class TwilioSmsProvider:
-    def send(self, recipient: str, message: str) -> ProviderResult:
+    def send(
+        self, recipient: str, message: str, *, event_type: str | None = None
+    ) -> ProviderResult:
         settings = get_settings()
         if (
             not settings.twilio_account_sid
             or not settings.twilio_auth_token
-            or not settings.twilio_from_number
+            or (not settings.twilio_trial_mode and not settings.twilio_from_number)
         ):
             raise ProviderSendError("Twilio configuration is missing")
+        data = {
+            "To": recipient,
+            "Body": twilio_trial_template(event_type or "")
+            if settings.twilio_trial_mode
+            else message,
+        }
+        if not settings.twilio_trial_mode:
+            data["From"] = settings.twilio_from_number
         try:
             response = httpx.post(
                 f"https://api.twilio.com/2010-04-01/Accounts/"
                 f"{settings.twilio_account_sid}/Messages.json",
                 auth=(settings.twilio_account_sid, settings.twilio_auth_token),
-                data={
-                    "From": settings.twilio_from_number,
-                    "To": recipient,
-                    "Body": message,
-                },
+                data=data,
                 timeout=10,
             )
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise ProviderSendError("Twilio send failed") from exc
+        except httpx.RequestError as exc:
+            raise ProviderSendError(f"Twilio request failed: {exc.__class__.__name__}") from exc
+        if response.status_code >= 400:
+            raise ProviderSendError(
+                f"Twilio send failed ({response.status_code}): {provider_error_detail(response)}"
+            )
         data = response.json()
         message_id = data.get("sid") if isinstance(data, dict) else None
         return ProviderResult(message_id=message_id)

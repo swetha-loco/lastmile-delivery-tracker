@@ -23,7 +23,21 @@ class OrderInput(BaseModel):
         return clean_required(value)
 
 
-class AdminOrderCreateRequest(OrderInput):
+class OrderCreateRequest(OrderInput):
+    package_description: str | None = Field(default=None, max_length=200)
+    is_fragile: bool = False
+    delivery_instructions: str | None = Field(default=None, max_length=500)
+
+    @field_validator("package_description", "delivery_instructions")
+    @classmethod
+    def clean_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class AdminOrderCreateRequest(OrderCreateRequest):
     customer_id: int
 
 
@@ -65,6 +79,9 @@ class OrderSummary(BaseModel):
     current_status: OrderStatus
     total_charge: Decimal
     current_agent_id: int | None
+    package_description: str | None
+    is_fragile: bool
+    delivery_instructions: str | None
     created_at: datetime
 
 

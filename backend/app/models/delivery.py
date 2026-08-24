@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Index, Numeric, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Index, Numeric, String
 from sqlalchemy import UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -85,6 +85,9 @@ class Order(Base):
     breadth_cm: Mapped[Decimal] = mapped_column(Numeric(10, 3), nullable=False)
     height_cm: Mapped[Decimal] = mapped_column(Numeric(10, 3), nullable=False)
     actual_weight_kg: Mapped[Decimal] = mapped_column(Numeric(10, 3), nullable=False)
+    package_description: Mapped[str | None] = mapped_column(String(200))
+    is_fragile: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
+    delivery_instructions: Mapped[str | None] = mapped_column(String(500))
     volumetric_weight_kg: Mapped[Decimal] = mapped_column(
         Numeric(10, 3), nullable=False
     )

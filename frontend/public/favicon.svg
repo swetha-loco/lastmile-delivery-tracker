@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Last-Mile Delivery Tracker">
+  <rect width="64" height="64" rx="14" fill="#071D34"/>
+  <path d="M17 23.5 32 15l15 8.5v17L32 49 17 40.5z" fill="#FFFFFF"/>
+  <path d="M17 23.5 32 32l15-8.5M32 32v17" fill="none" stroke="#DDE5E1" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M24.5 19.25 39.5 27.75" fill="none" stroke="#F25F3A" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="47" cy="17" r="6" fill="#F25F3A"/>
+  <path d="M10 44h12" stroke="#128C7E" stroke-width="4" stroke-linecap="round"/>
+  <path d="M42 44h12" stroke="#128C7E" stroke-width="4" stroke-linecap="round"/>
+</svg>

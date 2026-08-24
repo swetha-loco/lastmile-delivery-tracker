@@ -21,7 +21,7 @@ from app.models import (
     UserRole,
     Zone,
 )
-from app.schemas.orders import OrderInput
+from app.schemas.orders import OrderCreateRequest, OrderInput
 from app.services import geocoding
 from app.services.configuration import normalize_postal_code
 from app.services.lifecycle import current_attempt, transition_order
@@ -96,7 +96,7 @@ def build_quote(db: Session, payload: OrderInput) -> QuoteResult:
 
 
 def create_confirmed_order(
-    db: Session, *, payload: OrderInput, customer: User, creator: User
+    db: Session, *, payload: OrderCreateRequest, customer: User, creator: User
 ) -> Order:
     quote = build_quote(db, payload)
     order = Order(
@@ -115,6 +115,9 @@ def create_confirmed_order(
         length_cm=payload.length_cm,
         breadth_cm=payload.breadth_cm,
         height_cm=payload.height_cm,
+        package_description=payload.package_description,
+        is_fragile=payload.is_fragile,
+        delivery_instructions=payload.delivery_instructions,
         actual_weight_kg=quote.price.actual_weight_kg,
         volumetric_weight_kg=quote.price.volumetric_weight_kg,
         billable_weight_kg=quote.price.billable_weight_kg,
@@ -308,6 +311,9 @@ def order_summary(order: Order) -> dict[str, object]:
         "current_status": order.current_status,
         "total_charge": order.total_charge,
         "current_agent_id": order.current_agent_id,
+        "package_description": order.package_description,
+        "is_fragile": order.is_fragile,
+        "delivery_instructions": order.delivery_instructions,
         "created_at": order.created_at,
     }
 

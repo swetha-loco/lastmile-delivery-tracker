@@ -1,16 +1,22 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 
-import type { OrderInput, OrderType, PaymentType, QuoteResponse } from '../../api/client'
+import type {
+  OrderCreateInput,
+  OrderInput,
+  OrderType,
+  PaymentType,
+  QuoteResponse,
+} from '../../api/client'
 import { ApiError, createOrder, quoteOrder } from '../../api/client'
 import { PriceBreakdown } from '../../components/orders/PriceBreakdown'
 import { RouteRail } from '../../components/orders/RouteRail'
 import { Button } from '../../components/ui/Button'
-import { FormField, SelectInput, TextInput } from '../../components/ui/FormField'
+import { FormField, SelectInput, TextArea, TextInput } from '../../components/ui/FormField'
 import { Icon } from '../../components/ui/Icon'
 import { useAuth } from '../../lib/auth'
 
-const initialForm: OrderInput = {
+const initialForm: OrderCreateInput = {
   pickup_address: '',
   drop_address: '',
   length_cm: '',
@@ -19,22 +25,41 @@ const initialForm: OrderInput = {
   actual_weight_kg: '',
   order_type: 'B2C',
   payment_type: 'PREPAID',
+  package_description: '',
+  is_fragile: false,
+  delivery_instructions: '',
 }
 
 export default function NewOrderPage() {
   const { token } = useAuth()
   const navigate = useNavigate()
-  const [form, setForm] = useState<OrderInput>(initialForm)
+  const [form, setForm] = useState<OrderCreateInput>(initialForm)
   const [quote, setQuote] = useState<QuoteResponse | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [isQuoting, setIsQuoting] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
 
-  function updateField<K extends keyof OrderInput>(field: K, value: OrderInput[K]) {
+  function updateField<K extends keyof OrderCreateInput>(
+    field: K,
+    value: OrderCreateInput[K],
+  ) {
     setQuote(null)
     setNotice('')
     setForm((current) => ({ ...current, [field]: value }))
+  }
+
+  function quotePayload(): OrderInput {
+    return {
+      pickup_address: form.pickup_address,
+      drop_address: form.drop_address,
+      length_cm: form.length_cm,
+      breadth_cm: form.breadth_cm,
+      height_cm: form.height_cm,
+      actual_weight_kg: form.actual_weight_kg,
+      order_type: form.order_type,
+      payment_type: form.payment_type,
+    }
   }
 
   async function handleQuote(event: React.FormEvent) {
@@ -44,7 +69,7 @@ export default function NewOrderPage() {
     setNotice('')
     setIsQuoting(true)
     try {
-      setQuote(await quoteOrder(token, form))
+      setQuote(await quoteOrder(token, quotePayload()))
       setNotice('Quote ready. Review the total before confirming your order.')
     } catch (exc) {
       setError(exc instanceof ApiError ? exc.message : 'Unable to calculate quote')
@@ -162,6 +187,61 @@ export default function NewOrderPage() {
               </div>
             </section>
 
+            <section className="mt-7">
+              <div className="flex items-center gap-3">
+                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#FFF2D8] text-[#D98613]">
+                  <Icon name="box" className="h-5 w-5" />
+                </span>
+                <div>
+                  <h2 className="text-lg font-extrabold text-[#142033]">
+                    Package & handling
+                  </h2>
+                  <p className="text-sm font-semibold text-[#667085]">
+                    Optional details for the operations team and delivery agent.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <FormField label="Package description">
+                  <TextInput
+                    maxLength={200}
+                    onChange={(event) =>
+                      updateField('package_description', event.target.value)
+                    }
+                    placeholder="Laptop accessories, documents, books"
+                    value={form.package_description ?? ''}
+                  />
+                </FormField>
+                <label className="flex min-h-12 items-center gap-3 rounded-lg border border-[#DDE5E1] bg-[#F7F8F6] px-4 text-sm font-bold text-[#142033]">
+                  <input
+                    checked={Boolean(form.is_fragile)}
+                    className="h-4 w-4 accent-[#F25F3A]"
+                    onChange={(event) => updateField('is_fragile', event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>
+                    Fragile
+                    <span className="block text-xs font-semibold text-[#667085]">
+                      Handle this package with extra care
+                    </span>
+                  </span>
+                </label>
+              </div>
+              <div className="mt-4">
+                <FormField label="Delivery instructions">
+                  <TextArea
+                    maxLength={500}
+                    onChange={(event) =>
+                      updateField('delivery_instructions', event.target.value)
+                    }
+                    placeholder="Call before arrival, leave with building security, ring doorbell"
+                    rows={3}
+                    value={form.delivery_instructions ?? ''}
+                  />
+                </FormField>
+              </div>
+            </section>
+
             <section className="mt-7 grid gap-4 md:grid-cols-2">
               <FormField label="Order type">
                 <SelectInput
@@ -225,6 +305,9 @@ export default function NewOrderPage() {
                   billableWeight={quote.billable_weight_kg}
                   codSurcharge={quote.cod_surcharge}
                   deliveryCharge={quote.delivery_charge}
+                  destinationZone={quote.drop.zone_name}
+                  orderType={quote.order_type}
+                  originZone={quote.pickup.zone_name}
                   ratePerKg={quote.rate_per_kg}
                   totalCharge={quote.total_charge}
                   volumetricWeight={quote.volumetric_weight_kg}

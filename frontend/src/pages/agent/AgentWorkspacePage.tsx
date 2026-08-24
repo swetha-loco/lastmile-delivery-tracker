@@ -311,6 +311,38 @@ export default function AgentWorkspacePage() {
                       spacious
                     />
                   </div>
+                  {currentOrder.package_description ||
+                  currentOrder.is_fragile ||
+                  currentOrder.delivery_instructions ? (
+                    <section className="mt-5 rounded-xl border border-[#DDE5E1] bg-[#F7F8F6] p-4">
+                      <p className="text-xs font-extrabold uppercase tracking-[0.1em] text-[#667085]">
+                        Package & handling
+                      </p>
+                      <div className="mt-3 grid gap-3 text-sm font-semibold text-[#667085]">
+                        {currentOrder.package_description ? (
+                          <div>
+                            <span className="font-extrabold text-[#142033]">Package: </span>
+                            {currentOrder.package_description}
+                          </div>
+                        ) : null}
+                        {currentOrder.is_fragile ? (
+                          <div className="rounded-lg border border-[#F8D79B] bg-[#FFF8EB] p-3 font-bold text-[#8A4B00]">
+                            Fragile package - handle with care
+                          </div>
+                        ) : null}
+                        {currentOrder.delivery_instructions ? (
+                          <div>
+                            <p className="text-xs font-extrabold uppercase tracking-[0.08em]">
+                              Delivery instructions
+                            </p>
+                            <p className="mt-1 leading-6 text-[#142033]">
+                              {currentOrder.delivery_instructions}
+                            </p>
+                          </div>
+                        ) : null}
+                      </div>
+                    </section>
+                  ) : null}
                   <AgentProgress status={currentOrder.current_status} />
                   {action ? (
                     <div className="mt-6 flex flex-wrap gap-3">

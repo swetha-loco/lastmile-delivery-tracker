@@ -9,6 +9,7 @@ from app.dependencies import get_current_user, require_customer, require_role
 from app.models import Order, OrderStatusHistory, User, UserRole
 from app.schemas.orders import (
     OrderDetail,
+    OrderCreateRequest,
     OrderInput,
     OrderPage,
     QuoteResponse,
@@ -35,7 +36,7 @@ def quote_order(
 
 @router.post("", response_model=OrderDetail, status_code=status.HTTP_201_CREATED)
 def create_order(
-    payload: OrderInput,
+    payload: OrderCreateRequest,
     customer: Annotated[User, Depends(require_customer)],
     db: Annotated[Session, Depends(get_db)],
 ) -> dict[str, object]:
@@ -208,6 +209,9 @@ def order_detail(order: Order) -> dict[str, object]:
         "length_cm": order.length_cm,
         "breadth_cm": order.breadth_cm,
         "height_cm": order.height_cm,
+        "package_description": order.package_description,
+        "is_fragile": order.is_fragile,
+        "delivery_instructions": order.delivery_instructions,
         "actual_weight_kg": order.actual_weight_kg,
         "volumetric_weight_kg": order.volumetric_weight_kg,
         "billable_weight_kg": order.billable_weight_kg,

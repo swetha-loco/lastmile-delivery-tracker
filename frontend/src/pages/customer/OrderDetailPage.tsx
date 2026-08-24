@@ -154,6 +154,9 @@ export default function OrderDetailPage({ trackingOnly = false }: { trackingOnly
                   billableWeight={order.billable_weight_kg}
                   codSurcharge={order.cod_surcharge}
                   deliveryCharge={order.delivery_charge}
+                  destinationZone={order.drop_zone_name}
+                  orderType={order.order_type}
+                  originZone={order.pickup_zone_name}
                   ratePerKg={order.rate_per_kg}
                   totalCharge={order.total_charge}
                   volumetricWeight={order.volumetric_weight_kg}
@@ -164,11 +167,37 @@ export default function OrderDetailPage({ trackingOnly = false }: { trackingOnly
                     Package
                   </p>
                   <div className="mt-4 grid gap-3 text-sm font-semibold text-[#667085]">
+                    {order.package_description ? (
+                      <FactLine label="Contents" value={order.package_description} />
+                    ) : null}
                     <FactLine label="Dimensions" value={`${order.length_cm} x ${order.breadth_cm} x ${order.height_cm} cm`} />
                     <FactLine label="Actual weight" value={`${order.actual_weight_kg} kg`} />
                     <FactLine label="Total" value={formatCurrency(order.total_charge)} />
                   </div>
                 </section>
+
+                {order.is_fragile || order.delivery_instructions ? (
+                  <section className="rounded-xl border border-[#DDE5E1] bg-white p-5">
+                    <p className="text-xs font-extrabold uppercase tracking-[0.1em] text-[#667085]">
+                      Handling
+                    </p>
+                    {order.is_fragile ? (
+                      <div className="mt-4 rounded-lg border border-[#F8D79B] bg-[#FFF8EB] p-3 text-sm font-bold text-[#8A4B00]">
+                        Fragile package - handle with care
+                      </div>
+                    ) : null}
+                    {order.delivery_instructions ? (
+                      <div className="mt-4">
+                        <p className="text-xs font-extrabold uppercase tracking-[0.08em] text-[#667085]">
+                          Delivery instructions
+                        </p>
+                        <p className="mt-2 text-sm font-semibold leading-6 text-[#142033]">
+                          {order.delivery_instructions}
+                        </p>
+                      </div>
+                    ) : null}
+                  </section>
+                ) : null}
 
                 {order.current_status === 'FAILED' ? (
                   <section className="rounded-xl border border-[#F1B5B5] bg-white p-5">

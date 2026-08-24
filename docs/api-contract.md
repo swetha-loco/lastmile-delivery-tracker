@@ -159,6 +159,14 @@ CUSTOMER only.
 Creates the caller's own order. The backend geocodes and recalculates
 authoritative pricing again. Frontend-submitted totals are ignored.
 
+Confirmed order creation may also include optional operational handling fields:
+
+- `package_description`
+- `is_fragile`
+- `delivery_instructions`
+
+These fields do not affect quote or pricing calculation.
+
 Returns `201 Created`.
 
 ### GET /orders
@@ -314,6 +322,7 @@ Request includes:
 
 - `customer_id`
 - normal order input
+- optional operational handling fields
 
 Backend calculates authoritative price.
 

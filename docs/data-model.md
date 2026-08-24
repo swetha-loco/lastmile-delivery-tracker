@@ -258,6 +258,9 @@ Package columns:
 - `length_cm`
 - `breadth_cm`
 - `height_cm`
+- `package_description`
+- `is_fragile`
+- `delivery_instructions`
 - `actual_weight_kg`
 - `volumetric_weight_kg`
 - `billable_weight_kg`
@@ -288,6 +291,9 @@ Rules and constraints:
 - `created_by_id` is the customer or admin who created the order.
 - Input dimensions must be greater than 0.
 - Actual weight must be greater than 0.
+- `package_description` and `delivery_instructions` are optional operational
+  handling fields and do not affect pricing.
+- `is_fragile` defaults to false and does not add a surcharge.
 - Calculated weights must be greater than 0.
 - Monetary amounts cannot be negative.
 - `rate_per_kg` must be positive.
